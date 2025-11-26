@@ -1,4 +1,4 @@
-// server.js - AI checker backend dùng Gemini (CommonJS)
+// server.js - Backend AI checker dùng Gemini (CommonJS)
 
 const express = require("express");
 const cors = require("cors");
@@ -8,14 +8,12 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 dotenv.config();
 
 const app = express();
-
-// Cho phép JSON body
 app.use(express.json());
 
-// CORS cho frontend trên domain khác
+// CORS
 app.use(
   cors({
-    origin: "*", // sau này muốn chặt hơn thì đổi thành 'https://covuasaigon.edu.vn'
+    origin: "*",
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
   })
@@ -31,16 +29,17 @@ app.use((req, res, next) => {
   next();
 });
 
-// Kiểm tra biến môi trường
+// Khởi tạo Gemini
 if (!process.env.GEMINI_API_KEY) {
-  console.error("⚠️  GEMINI_API_KEY chưa được thiết lập trong env!");
+  console.error("GEMINI_API_KEY chưa được thiết lập!");
 }
 
-// Khởi tạo Gemini client (dùng model mới)
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Model mới, rẻ & nhanh
 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
-// ========= 1. RULE NGÔN TỪ CẤM / NHẠY CẢM =========
+/* ==================== RULE NGÔN TỪ CẤM ==================== */
+
 const forbiddenConfig = {
   facebook: [
     {
@@ -80,26 +79,16 @@ function checkForbidden(text, platform) {
       });
     }
   }
-
   return warnings;
 }
 
-// ========= 2. THÔNG TIN BẮT BUỘC (CẤU HÌNH CỐ ĐỊNH) =========
-// 👉 Tùy chỉnh theo trung tâm của bạn
+/* ==================== THÔNG TIN BẮT BUỘC CỐ ĐỊNH ==================== */
+// Bạn chỉnh sửa list này theo công ty mình
+
 const requiredConfig = {
   facebook: {
-    requiredBranches: [
-      "📍 HỆ THỐNG TRUNG TÂM CỜ VUA SÀI GÒN (SGC)
-🌐 Website: covuasaigon.edu.vn
-📌 Fanpage: facebook.com/covuasaigon.edu.vn
-🏠 N13, Khu Golden Mansion, số 119 Phổ Quang – Phú Nhuận – TP.HCM
-🏡 17 Cơ sở trực thuộc: TP Thủ Đức (Thủ Đức | Quận 9 | Quận 2) | Bình Thạnh | Phú Nhuận | Gò Vấp | Tân Bình | Tân Phú | Bình Tân | Quận 10",
-      
-    ],
-    requiredHotlines: [
-      "0845.700.135",
-      // "0909 888 999",
-    ],
+    requiredBranches: ["Cờ Vua Sài Gòn"],
+    requiredHotlines: [],
   },
   website: {
     requiredBranches: ["Cờ Vua Sài Gòn"],
@@ -114,7 +103,6 @@ const requiredConfig = {
 function checkRequired(text, platform) {
   const cfg = requiredConfig[platform] || {};
   const warnings = [];
-
   const contentLower = text.toLowerCase();
 
   (cfg.requiredBranches || []).forEach((branch) => {
@@ -140,11 +128,11 @@ function checkRequired(text, platform) {
   return warnings;
 }
 
-// ========= 3. YÊU CẦU ĐỘNG DO NGƯỜI DÙNG NHẬP =========
+/* ==================== YÊU CẦU DO NGƯỜI DÙNG NHẬP ==================== */
+
 function checkDynamicRequirements(text, requirementsRaw) {
   if (!requirementsRaw) return [];
 
-  // Mỗi dòng trong ô yêu cầu là 1 rule
   const lines = requirementsRaw
     .split("\n")
     .map((l) => l.trim())
@@ -154,7 +142,7 @@ function checkDynamicRequirements(text, requirementsRaw) {
   const warnings = [];
 
   lines.forEach((req) => {
-    const cleanReq = req.replace(/^[-•+]/, "").trim(); // bỏ dấu gạch đầu dòng nếu có
+    const cleanReq = req.replace(/^[-•+]/, "").trim();
     if (!cleanReq) return;
 
     if (!contentLower.includes(cleanReq.toLowerCase())) {
@@ -170,14 +158,12 @@ function checkDynamicRequirements(text, requirementsRaw) {
   return warnings;
 }
 
-// ========= ROUTES =========
+/* ==================== ROUTES ==================== */
 
-// Test route
 app.get("/", (req, res) => {
   res.send("Backend Gemini hoạt động!");
 });
 
-// API chính
 app.post("/api/check", async (req, res) => {
   try {
     const { text, platform = "facebook", requirements } = req.body;
@@ -186,18 +172,12 @@ app.post("/api/check", async (req, res) => {
       return res.status(400).json({ error: "Vui lòng gửi nội dung text" });
     }
 
-    // Check rule custom
     const forbiddenWarnings = checkForbidden(text, platform);
     const requiredWarnings = checkRequired(text, platform);
     const dynamicReqWarnings = checkDynamicRequirements(text, requirements);
 
     const prompt = `
 Bạn là trợ lý biên tập nội dung tiếng Việt cho doanh nghiệp.
-
-Bối cảnh doanh nghiệp:
-- Là trung tâm / doanh nghiệp dịch vụ, cần ngôn từ lịch sự, chuẩn mực.
-- Không dùng từ thô tục, không phân biệt, không cam kết kết quả 100%.
-- Xưng hô thân thiện, tôn trọng khách hàng.
 
 NHIỆM VỤ:
 1. Sửa chính tả, dấu câu, ngữ pháp cho bài viết.
@@ -225,7 +205,6 @@ BÀI GỐC:
 
     let aiData;
     try {
-      // cắt phần JSON thuần nếu Gemini trả kèm text
       const firstBrace = rawText.indexOf("{");
       const lastBrace = rawText.lastIndexOf("}");
       const jsonString =
@@ -235,12 +214,12 @@ BÀI GỐC:
 
       aiData = JSON.parse(jsonString);
     } catch (e) {
-      console.error("❌ Không parse được JSON từ Gemini:", rawText);
+      console.error("Không parse được JSON từ Gemini:", rawText);
       aiData = {
         corrected_text: text,
         spelling_issues: [],
         general_suggestions: [
-          "Gemini không trả về JSON hợp lệ, vui lòng thử lại sau hoặc kiểm tra log.",
+          "Gemini không trả về JSON hợp lệ, vui lòng thử lại sau.",
         ],
       };
     }
@@ -254,7 +233,7 @@ BÀI GỐC:
       dynamic_requirements: dynamicReqWarnings,
     });
   } catch (err) {
-    console.error("🔥 LỖI GEMINI:", err?.message || err);
+    console.error("LỖI GEMINI:", err?.message || err);
     res.status(500).json({
       error: "Gemini error",
       detail: err?.message || "Unknown error",
@@ -262,7 +241,6 @@ BÀI GỐC:
   }
 });
 
-// Start server
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log("Server Gemini đang chạy ở port", port);

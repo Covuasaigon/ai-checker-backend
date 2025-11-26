@@ -1,5 +1,4 @@
-// server.js - Backend AI checker dùng Gemini (CommonJS)
-
+// server.js dùng Gemini (CommonJS)
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
@@ -8,36 +7,26 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 dotenv.config();
 
 const app = express();
-app.use(express.json());
 
-// CORS cho frontend
-app.use(
-  cors({
-    origin: "*", // sau này có thể đổi thành 'https://covuasaigon.edu.vn'
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type"],
-  })
-);
-
+// CORS – cho phép gọi từ mọi domain (sau này có thể giới hạn)
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") return res.sendStatus(200);
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
   next();
 });
 
-// ===== Khởi tạo Gemini =====
-if (!process.env.GEMINI_API_KEY) {
-  console.error("⚠️  GEMINI_API_KEY chưa được thiết lập trong env!");
-}
+app.use(cors());
+app.use(express.json());
 
+// ===== KHỞI TẠO GEMINI =====
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-// Model nhanh & tiết kiệm
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
 
-/* ============ 1. RULE NGÔN TỪ CẤM / NHẠY CẢM ============ */
-
+// ===== RULE NGÔN TỪ CẤM / NHẠY CẢM (ví dụ) =====
 const forbiddenConfig = {
   facebook: [
     {
@@ -47,8 +36,8 @@ const forbiddenConfig = {
     },
     {
       pattern: /100% khỏi bệnh/gi,
-      reason: "Khẳng định tuyệt đối về hiệu quả điều trị.",
-      suggestion: "Dùng 'hỗ trợ điều trị', 'giảm nguy cơ'…",
+      reason: "Khẳng định tuyệt đối về sức khoẻ.",
+      suggestion: "Dùng 'giảm nguy cơ', 'hỗ trợ điều trị'…",
     },
   ],
   website: [
@@ -69,7 +58,6 @@ function checkForbidden(text, platform) {
     let m;
     while ((m = rule.pattern.exec(text)) !== null) {
       warnings.push({
-        type: "forbidden",
         original: m[0],
         level: "warning",
         reason: rule.reason,
@@ -80,137 +68,71 @@ function checkForbidden(text, platform) {
   return warnings;
 }
 
-/* ============ 2. CẤU HÌNH THÔNG TIN CÔNG TY ============ */
-/* Anh/chị chỉnh list này cho đúng với trung tâm mình */
-
-const companyConfig = {
-  brandNames: ["Cờ Vua Sài Gòn", "Co Vua Sai Gon"],
-  branches: [
-    "CN Phú Nhuận",
-    "CN Quận 12",
-    "CN Gò Vấp",
-    // thêm nếu có
-  ],
-  hotlines: [
-    "0938 123 456",
-    "0909 888 999",
-    // ...
-  ],
-  slogans: [
-    "Nơi trẻ em lớn lên cùng quân cờ",
-    "Tư duy logic – trưởng thành cùng cờ vua",
-    // slogan khác...
-  ],
-  services: [
-    "lớp cờ",
-    "lớp học cờ",
-    "khóa học cờ",
-    "khóa học online",
-    // ...
-  ],
+// ===== RULE THÔNG TIN CÔNG TY (Cờ Vua Sài Gòn) =====
+const companyChecks = {
+  brand: {
+    pattern: /(cờ vua sài gòn|covuasaigon\.edu\.vn)/i,
+    message: 'Nên nhắc đến tên trung tâm "Cờ Vua Sài Gòn" hoặc domain.',
+  },
+  branch: {
+    pattern: /(chi nhánh|cơ sở|campus|cs[0-9]+)/i,
+    message:
+      "Nên ghi ít nhất một chi nhánh / cơ sở để phụ huynh biết địa điểm.",
+  },
+  hotline: {
+    pattern: /(09[0-9]{7,8}|hotline|điện thoại liên hệ)/i,
+    message: "Nên có hotline / số điện thoại để phụ huynh liên hệ.",
+  },
+  slogan: {
+    pattern: /(tư duy logic|khơi gợi sáng tạo|cùng con lớn lên|slogan)/i,
+    message:
+      "Có thể thêm câu slogan / thông điệp thương hiệu để bài viết ấn tượng hơn.",
+  },
+  service: {
+    pattern: /(lớp cờ vua|khóa học cờ vua|lớp vẽ|khóa học vẽ|chương trình học)/i,
+    message: "Nên nhắc rõ dịch vụ: lớp cờ vua, lớp vẽ hoặc chương trình học.",
+  },
 };
 
-// selected = { brand: true, branch: false, ... }
-function checkCompanyRequirements(text, selected = {}) {
+function checkCompanyInfo(text, selectedChecks = {}) {
   const warnings = [];
-  const lower = text.toLowerCase();
-
-  if (selected.brand) {
-    const hasBrand = companyConfig.brandNames.some((b) =>
-      lower.includes(b.toLowerCase())
-    );
-    if (!hasBrand) {
+  for (const key of Object.keys(companyChecks)) {
+    if (!selectedChecks[key]) continue; // checkbox nào không chọn thì bỏ qua
+    const cfg = companyChecks[key];
+    if (!cfg.pattern.test(text)) {
       warnings.push({
-        type: "missing_brand",
-        level: "warning",
-        message: "Bài viết chưa nhắc đến tên thương hiệu (Cờ Vua Sài Gòn).",
+        type: key,
+        message: cfg.message,
       });
     }
   }
-
-  if (selected.branch) {
-    const hasBranch = companyConfig.branches.some((b) =>
-      lower.includes(b.toLowerCase())
-    );
-    if (!hasBranch) {
-      warnings.push({
-        type: "missing_branch",
-        level: "warning",
-        message: "Bài viết chưa có tên chi nhánh nào.",
-      });
-    }
-  }
-
-  if (selected.hotline) {
-    const hasHotline = companyConfig.hotlines.some((h) => text.includes(h));
-    if (!hasHotline) {
-      warnings.push({
-        type: "missing_hotline",
-        level: "warning",
-        message: "Bài viết chưa có hotline chính của trung tâm.",
-      });
-    }
-  }
-
-  if (selected.slogan) {
-    const hasSlogan = companyConfig.slogans.some((s) =>
-      lower.includes(s.toLowerCase())
-    );
-    if (!hasSlogan) {
-      warnings.push({
-        type: "missing_slogan",
-        level: "warning",
-        message: "Bài viết chưa có câu slogan của trung tâm.",
-      });
-    }
-  }
-
-  if (selected.service) {
-    const hasService = companyConfig.services.some((s) =>
-      lower.includes(s.toLowerCase())
-    );
-    if (!hasService) {
-      warnings.push({
-        type: "missing_service",
-        level: "warning",
-        message: "Bài viết chưa nhắc tới dịch vụ / khóa học cờ vua.",
-      });
-    }
-  }
-
   return warnings;
 }
 
-/* ============ 3. YÊU CẦU CHECKLIST TỰ NHẬP (TEXT / CSV) ============ */
-
-function checkDynamicRequirements(text, requirementsRaw) {
-  if (!requirementsRaw) return [];
-  const lines = requirementsRaw
+// ===== YÊU CẦU CUSTOM (nhập tay + load file) =====
+function parseRequirementsText(raw) {
+  if (!raw) return [];
+  return raw
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
+}
 
+function checkDynamicRequirements(text, requirements) {
   const lower = text.toLowerCase();
   const warnings = [];
-
-  lines.forEach((req) => {
-    const cleanReq = req.replace(/^[-•+]/, "").trim();
-    if (!cleanReq) return;
-    if (!lower.includes(cleanReq.toLowerCase())) {
+  requirements.forEach((req) => {
+    if (!lower.includes(req.toLowerCase())) {
       warnings.push({
-        type: "missing_requirement",
-        level: "warning",
-        requirement: cleanReq,
-        message: `Bài viết chưa đáp ứng yêu cầu: "${cleanReq}"`,
+        requirement: req,
+        message: `Bài viết chưa đáp ứng yêu cầu: "${req}"`,
       });
     }
   });
-
   return warnings;
 }
 
-/* ==================== ROUTES ==================== */
-
+// ===== ROUTES =====
 app.get("/", (req, res) => {
   res.send("Backend Gemini hoạt động!");
 });
@@ -220,7 +142,7 @@ app.post("/api/check", async (req, res) => {
     const {
       text,
       platform = "facebook",
-      requirementsText,
+      requirementsText = "",
       selectedChecks = {},
     } = req.body;
 
@@ -228,26 +150,37 @@ app.post("/api/check", async (req, res) => {
       return res.status(400).json({ error: "Vui lòng gửi nội dung text" });
     }
 
+    // 1. Check rule cứng ở backend
     const forbiddenWarnings = checkForbidden(text, platform);
-    const companyWarnings = checkCompanyRequirements(text, selectedChecks);
-    const dynamicReqWarnings = checkDynamicRequirements(text, requirementsText);
+    const companyWarnings = checkCompanyInfo(text, selectedChecks);
+    const dynamicList = parseRequirementsText(requirementsText);
+    const dynamicWarnings = checkDynamicRequirements(text, dynamicList);
 
+    // 2. Gọi Gemini để:
+    //    - sửa chính tả
+    //    - liệt kê lỗi
+    //    - gợi ý tối ưu
+    //    - gợi ý hashtag
+    //    - viết lại bài theo phong cách thân thiện với phụ huynh
     const prompt = `
-Bạn là trợ lý biên tập nội dung tiếng Việt dành cho trung tâm giáo dục cho trẻ 3–15 tuổi.
+Bạn là trợ lý biên tập nội dung tiếng Việt cho một trung tâm dạy Cờ vua & Vẽ cho trẻ từ 3–15 tuổi.
+Đối tượng chính là phụ huynh, giọng văn cần:
+- Thân thiện, tích cực, tôn trọng phụ huynh và các bé
+- Không dùng từ thô tục, không miệt thị, không phân biệt
+- Không hứa hẹn cam kết kết quả tuyệt đối 100%
+- Phù hợp cho môi trường giáo dục, an toàn cho trẻ em
 
-💡 YÊU CẦU VĂN PHONG:
-- Thân thiện, gần gũi với trẻ và phụ huynh.
-- Tích cực, truyền cảm hứng.
-- Tuyệt đối không dùng từ thô tục, tiêu cực hoặc gây hoang mang.
-- Không sử dụng lời lẽ “đe dọa” hoặc gây áp lực như: kém cỏi, thất bại, dốt, yếu kém,...
-- Không đưa ra cam kết 100% hoặc khẳng định kết quả.
+NHIỆM VỤ:
+1. Sửa chính tả, dấu câu, ngữ pháp cho bài viết, giữ nguyên ý chính.
+2. Liệt kê các lỗi chính tả đã sửa.
+3. Đưa ra gợi ý tối ưu nội dung (tối đa 5 gợi ý).
+4. Gợi ý từ 5–12 hashtag phù hợp cho bài viết về Cờ vua / Vẽ / giáo dục trẻ em.
+5. Viết lại toàn bộ bài theo phong cách:
+   - Vui tươi, ấm áp, khích lệ các bé
+   - Lịch sự, dễ hiểu cho phụ huynh
+   - Không thay đổi thông tin sự kiện / chương trình
 
-🎯 NHIỆM VỤ CỦA BẠN:
-1. Sửa chính tả, dấu câu, ngữ pháp và giúp bài viết trở nên thân thiện – lịch sự – phù hợp phụ huynh.
-2. Giữ nguyên ý chính, chỉ chỉnh lại cho rõ ràng, dễ đọc, phù hợp môi trường giáo dục trẻ.
-3. Liệt kê rõ các lỗi chính tả đã sửa (original, correct, reason).
-4. Đưa ra tối đa 5 gợi ý để cải thiện nội dung theo hướng thân thiện và phù hợp trẻ.
-5. CHỈ TRẢ VỀ DƯỚI DẠNG JSON, THEO FORMAT:
+CHỈ TRẢ VỀ DUY NHẤT MỘT ĐỐI TƯỢNG JSON VỚI CẤU TRÚC CHÍNH XÁC:
 
 {
   "corrected_text": "...",
@@ -256,51 +189,92 @@ Bạn là trợ lý biên tập nội dung tiếng Việt dành cho trung tâm g
   ],
   "general_suggestions": [
     "..."
-  ]
+  ],
+  "hashtags": [
+    "#..."
+  ],
+  "rewrite_text": "..."
 }
+
+Nếu không có lỗi chính tả, trả về "spelling_issues": [].
+Nếu không có gợi ý, trả về "general_suggestions": [].
+Nếu không cần hashtag, vẫn trả về "hashtags": [].
 
 BÀI GỐC:
 """${text}"""
 `;
 
-
     const result = await model.generateContent(prompt);
-    const rawText = result.response.text();
+    const rawText = result.response.text().trim();
 
     let aiData;
     try {
-      const firstBrace = rawText.indexOf("{");
-      const lastBrace = rawText.lastIndexOf("}");
-      const jsonString =
-        firstBrace !== -1 && lastBrace !== -1
-          ? rawText.slice(firstBrace, lastBrace + 1)
-          : rawText;
-
-      aiData = JSON.parse(jsonString);
+      aiData = JSON.parse(rawText);
     } catch (e) {
       console.error("Không parse được JSON từ Gemini:", rawText);
       aiData = {
         corrected_text: text,
         spelling_issues: [],
         general_suggestions: [
-          "Gemini không trả về JSON hợp lệ, vui lòng thử lại sau.",
+          "Gemini không trả về JSON hợp lệ, vui lòng thử lại sau hoặc rút ngắn bài viết.",
         ],
+        hashtags: [],
+        rewrite_text: text,
       };
     }
 
+    const correctedText = aiData.corrected_text || text;
+    const spellingIssues = aiData.spelling_issues || [];
+    const generalSuggestions = aiData.general_suggestions || [];
+    const hashtags = aiData.hashtags || [];
+    const rewriteText = aiData.rewrite_text || correctedText;
+
+    // 3. TÍNH ĐIỂM A/B/C DỰA TRÊN CHECKLIST
+    //    (điểm backend, không phụ thuộc Gemini)
+    let score = 100;
+    const spellCount = spellingIssues.length;
+    const forbidCount = forbiddenWarnings.length;
+    const companyCount = companyWarnings.length;
+    const dynamicCount = dynamicWarnings.length;
+
+    score -= Math.min(spellCount * 5, 30); // tối đa -30 điểm chính tả
+    score -= Math.min(forbidCount * 15, 45); // từ cấm nặng hơn
+    score -= Math.min(companyCount * 8, 24); // thiếu thông tin công ty
+    score -= Math.min(dynamicCount * 5, 25); // thiếu yêu cầu custom
+
+    if (score < 0) score = 0;
+
+    let grade = "A";
+    if (score < 65) grade = "C";
+    else if (score < 85) grade = "B";
+
+    const scoreReason = [
+      `Lỗi chính tả: ${spellCount}`,
+      `Từ cấm / nhạy cảm: ${forbidCount}`,
+      `Thiếu thông tin công ty: ${companyCount}`,
+      `Thiếu yêu cầu custom: ${dynamicCount}`,
+    ].join(" · ");
+
+    // 4. Trả về cho frontend
     res.json({
-      corrected_text: aiData.corrected_text || text,
-      spelling_issues: aiData.spelling_issues || [],
-      general_suggestions: aiData.general_suggestions || [],
+      corrected_text: correctedText,
+      spelling_issues: spellingIssues,
+      general_suggestions: generalSuggestions,
+      hashtags,
+      rewrite_text: rewriteText,
       forbidden_warnings: forbiddenWarnings,
       company_warnings: companyWarnings,
-      dynamic_requirements: dynamicReqWarnings,
+      dynamic_requirements: dynamicWarnings,
+
+      score,
+      grade,
+      score_reason: scoreReason,
     });
   } catch (err) {
-    console.error("🔥 LỖI GEMINI:", err?.message || err);
+    console.error("LỖI API /api/check:", err);
     res.status(500).json({
-      error: "Gemini error",
-      detail: err?.message || "Unknown error",
+      error: "Có lỗi khi xử lý với Gemini",
+      detail: err?.message || String(err),
     });
   }
 });

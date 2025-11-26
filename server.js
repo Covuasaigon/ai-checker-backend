@@ -7,8 +7,18 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 dotenv.config();
 
 const app = express();
-app.use(cors());
 app.use(express.json());
+
+// CORS thủ công cho tất cả domain (covuasaigon.edu.vn, v.v.)
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*"); // nếu sau này muốn chặt hơn thì đổi * thành domain của bạn
+  res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
 // Khởi tạo Gemini client
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);

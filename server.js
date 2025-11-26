@@ -10,10 +10,10 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// CORS
+// CORS cho frontend
 app.use(
   cors({
-    origin: "*",
+    origin: "*", // sau này có thể đổi thành 'https://covuasaigon.edu.vn'
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
   })
@@ -23,22 +23,20 @@ app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(200);
-  }
+  if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
 
-// Khởi tạo Gemini
+// ===== Khởi tạo Gemini =====
 if (!process.env.GEMINI_API_KEY) {
-  console.error("GEMINI_API_KEY chưa được thiết lập!");
+  console.error("⚠️  GEMINI_API_KEY chưa được thiết lập trong env!");
 }
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-// Model mới, rẻ & nhanh
+// Model nhanh & tiết kiệm
 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
-/* ==================== RULE NGÔN TỪ CẤM ==================== */
+/* ============ 1. RULE NGÔN TỪ CẤM / NHẠY CẢM ============ */
 
 const forbiddenConfig = {
   facebook: [
@@ -82,70 +80,123 @@ function checkForbidden(text, platform) {
   return warnings;
 }
 
-/* ==================== THÔNG TIN BẮT BUỘC CỐ ĐỊNH ==================== */
-// Bạn chỉnh sửa list này theo công ty mình
+/* ============ 2. CẤU HÌNH THÔNG TIN CÔNG TY ============ */
+/* Anh/chị chỉnh list này cho đúng với trung tâm mình */
 
-const requiredConfig = {
-  facebook: {
-    requiredBranches: ["Cờ Vua Sài Gòn"],
-    requiredHotlines: [],
-  },
-  website: {
-    requiredBranches: ["Cờ Vua Sài Gòn"],
-    requiredHotlines: [],
-  },
-  tiktok: {
-    requiredBranches: [],
-    requiredHotlines: [],
-  },
+const companyConfig = {
+  brandNames: ["Cờ Vua Sài Gòn", "Co Vua Sai Gon"],
+  branches: [
+    "CN Phú Nhuận",
+    "CN Quận 12",
+    "CN Gò Vấp",
+    // thêm nếu có
+  ],
+  hotlines: [
+    "0938 123 456",
+    "0909 888 999",
+    // ...
+  ],
+  slogans: [
+    "Nơi trẻ em lớn lên cùng quân cờ",
+    "Tư duy logic – trưởng thành cùng cờ vua",
+    // slogan khác...
+  ],
+  services: [
+    "lớp cờ",
+    "lớp học cờ",
+    "khóa học cờ",
+    "khóa học online",
+    // ...
+  ],
 };
 
-function checkRequired(text, platform) {
-  const cfg = requiredConfig[platform] || {};
+// selected = { brand: true, branch: false, ... }
+function checkCompanyRequirements(text, selected = {}) {
   const warnings = [];
-  const contentLower = text.toLowerCase();
+  const lower = text.toLowerCase();
 
-  (cfg.requiredBranches || []).forEach((branch) => {
-    if (!contentLower.includes(branch.toLowerCase())) {
+  if (selected.brand) {
+    const hasBrand = companyConfig.brandNames.some((b) =>
+      lower.includes(b.toLowerCase())
+    );
+    if (!hasBrand) {
+      warnings.push({
+        type: "missing_brand",
+        level: "warning",
+        message: "Bài viết chưa nhắc đến tên thương hiệu (Cờ Vua Sài Gòn).",
+      });
+    }
+  }
+
+  if (selected.branch) {
+    const hasBranch = companyConfig.branches.some((b) =>
+      lower.includes(b.toLowerCase())
+    );
+    if (!hasBranch) {
       warnings.push({
         type: "missing_branch",
         level: "warning",
-        message: `Bài viết chưa nhắc đến chi nhánh / thương hiệu: "${branch}"`,
+        message: "Bài viết chưa có tên chi nhánh nào.",
       });
     }
-  });
+  }
 
-  (cfg.requiredHotlines || []).forEach((phone) => {
-    if (!text.includes(phone)) {
+  if (selected.hotline) {
+    const hasHotline = companyConfig.hotlines.some((h) => text.includes(h));
+    if (!hasHotline) {
       warnings.push({
         type: "missing_hotline",
         level: "warning",
-        message: `Bài viết chưa có hotline: ${phone}`,
+        message: "Bài viết chưa có hotline chính của trung tâm.",
       });
     }
-  });
+  }
+
+  if (selected.slogan) {
+    const hasSlogan = companyConfig.slogans.some((s) =>
+      lower.includes(s.toLowerCase())
+    );
+    if (!hasSlogan) {
+      warnings.push({
+        type: "missing_slogan",
+        level: "warning",
+        message: "Bài viết chưa có câu slogan của trung tâm.",
+      });
+    }
+  }
+
+  if (selected.service) {
+    const hasService = companyConfig.services.some((s) =>
+      lower.includes(s.toLowerCase())
+    );
+    if (!hasService) {
+      warnings.push({
+        type: "missing_service",
+        level: "warning",
+        message: "Bài viết chưa nhắc tới dịch vụ / khóa học cờ vua.",
+      });
+    }
+  }
 
   return warnings;
 }
 
-/* ==================== YÊU CẦU DO NGƯỜI DÙNG NHẬP ==================== */
+/* ============ 3. YÊU CẦU CHECKLIST TỰ NHẬP (TEXT / CSV) ============ */
 
 function checkDynamicRequirements(text, requirementsRaw) {
   if (!requirementsRaw) return [];
-
   const lines = requirementsRaw
-    .split("\n")
+    .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
 
-  const contentLower = text.toLowerCase();
+  const lower = text.toLowerCase();
   const warnings = [];
 
   lines.forEach((req) => {
     const cleanReq = req.replace(/^[-•+]/, "").trim();
     if (!cleanReq) return;
-
-    if (!contentLower.includes(cleanReq.toLowerCase())) {
+    if (!lower.includes(cleanReq.toLowerCase())) {
       warnings.push({
         type: "missing_requirement",
         level: "warning",
@@ -166,24 +217,36 @@ app.get("/", (req, res) => {
 
 app.post("/api/check", async (req, res) => {
   try {
-    const { text, platform = "facebook", requirements } = req.body;
+    const {
+      text,
+      platform = "facebook",
+      requirementsText,
+      selectedChecks = {},
+    } = req.body;
 
     if (!text || !text.trim()) {
       return res.status(400).json({ error: "Vui lòng gửi nội dung text" });
     }
 
     const forbiddenWarnings = checkForbidden(text, platform);
-    const requiredWarnings = checkRequired(text, platform);
-    const dynamicReqWarnings = checkDynamicRequirements(text, requirements);
+    const companyWarnings = checkCompanyRequirements(text, selectedChecks);
+    const dynamicReqWarnings = checkDynamicRequirements(text, requirementsText);
 
     const prompt = `
-Bạn là trợ lý biên tập nội dung tiếng Việt cho doanh nghiệp.
+Bạn là trợ lý biên tập nội dung tiếng Việt dành cho trung tâm giáo dục cho trẻ 3–15 tuổi.
 
-NHIỆM VỤ:
-1. Sửa chính tả, dấu câu, ngữ pháp cho bài viết.
-2. Giữ nguyên ý chính, chỉ chỉnh cho rõ ràng, mạch lạc, chuyên nghiệp.
-3. Liệt kê các lỗi chính tả bạn đã sửa (original, correct, reason).
-4. Gợi ý chung để nội dung phù hợp hơn với môi trường doanh nghiệp (tối đa 5 gợi ý).
+💡 YÊU CẦU VĂN PHONG:
+- Thân thiện, gần gũi với trẻ và phụ huynh.
+- Tích cực, truyền cảm hứng.
+- Tuyệt đối không dùng từ thô tục, tiêu cực hoặc gây hoang mang.
+- Không sử dụng lời lẽ “đe dọa” hoặc gây áp lực như: kém cỏi, thất bại, dốt, yếu kém,...
+- Không đưa ra cam kết 100% hoặc khẳng định kết quả.
+
+🎯 NHIỆM VỤ CỦA BẠN:
+1. Sửa chính tả, dấu câu, ngữ pháp và giúp bài viết trở nên thân thiện – lịch sự – phù hợp phụ huynh.
+2. Giữ nguyên ý chính, chỉ chỉnh lại cho rõ ràng, dễ đọc, phù hợp môi trường giáo dục trẻ.
+3. Liệt kê rõ các lỗi chính tả đã sửa (original, correct, reason).
+4. Đưa ra tối đa 5 gợi ý để cải thiện nội dung theo hướng thân thiện và phù hợp trẻ.
 5. CHỈ TRẢ VỀ DƯỚI DẠNG JSON, THEO FORMAT:
 
 {
@@ -199,6 +262,7 @@ NHIỆM VỤ:
 BÀI GỐC:
 """${text}"""
 `;
+
 
     const result = await model.generateContent(prompt);
     const rawText = result.response.text();
@@ -229,11 +293,11 @@ BÀI GỐC:
       spelling_issues: aiData.spelling_issues || [],
       general_suggestions: aiData.general_suggestions || [],
       forbidden_warnings: forbiddenWarnings,
-      required_warnings: requiredWarnings,
+      company_warnings: companyWarnings,
       dynamic_requirements: dynamicReqWarnings,
     });
   } catch (err) {
-    console.error("LỖI GEMINI:", err?.message || err);
+    console.error("🔥 LỖI GEMINI:", err?.message || err);
     res.status(500).json({
       error: "Gemini error",
       detail: err?.message || "Unknown error",

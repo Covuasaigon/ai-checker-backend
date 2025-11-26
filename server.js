@@ -1,4 +1,5 @@
 // server.js dùng Gemini (CommonJS)
+
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
@@ -7,11 +8,22 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 dotenv.config();
 
 const app = express();
+
+// Cho phép JSON body
 app.use(express.json());
 
-// CORS thủ công cho tất cả domain (covuasaigon.edu.vn, v.v.)
+// CORS (cả cors() & thủ công cho chắc)
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
+
+// CORS thủ công (phòng khi cors middleware không bắt được preflight)
 app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*"); // nếu sau này muốn chặt hơn thì đổi * thành domain của bạn
+  res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") {
@@ -19,6 +31,11 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// Kiểm tra biến môi trường
+if (!process.env.GEMINI_API_KEY) {
+  console.error("⚠️  GEMINI_API_KEY chưa được thiết lập trong env!");
+}
 
 // Khởi tạo Gemini client
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -67,15 +84,16 @@ function checkForbidden(text, platform) {
   return warnings;
 }
 
-// Test route
+// ======= ROUTE TEST =======
 app.get("/", (req, res) => {
   res.send("Backend Gemini hoạt động!");
 });
 
-// API chính
+// ======= API CHÍNH /api/check =======
 app.post("/api/check", async (req, res) => {
   try {
     const { text, platform = "facebook" } = req.body;
+
     if (!text || !text.trim()) {
       return res.status(400).json({ error: "Vui lòng gửi nội dung text" });
     }
@@ -111,21 +129,34 @@ BÀI GỐC:
 """${text}"""
 `;
 
+    // Gọi Gemini
     const result = await model.generateContent(prompt);
     const rawText = result.response.text();
 
+    // Thử parse JSON (Gemini đôi khi trả thêm chữ rác quanh JSON)
     let aiData;
     try {
-      aiData = JSON.parse(rawText);
+      // Cố gắng cắt phần JSON thuần nếu cần
+      const firstBrace = rawText.indexOf("{");
+      const lastBrace = rawText.lastIndexOf("}");
+      const jsonString =
+        firstBrace !== -1 && lastBrace !== -1
+          ? rawText.slice(firstBrace, lastBrace + 1)
+          : rawText;
+
+      aiData = JSON.parse(jsonString);
     } catch (e) {
-      console.error("Không parse được JSON từ Gemini:", rawText);
+      console.error("❌ Không parse được JSON từ Gemini:", rawText);
       aiData = {
         corrected_text: text,
         spelling_issues: [],
-        general_suggestions: ["Gemini không trả về JSON hợp lệ, vui lòng thử lại."],
+        general_suggestions: [
+          "Gemini không trả về JSON hợp lệ, vui lòng thử lại sau hoặc kiểm tra log.",
+        ],
       };
     }
 
+    // Gộp kết quả để trả ra frontend
     res.json({
       corrected_text: aiData.corrected_text || text,
       spelling_issues: aiData.spelling_issues || [],
@@ -133,11 +164,15 @@ BÀI GỐC:
       forbidden_warnings: baseWarnings,
     });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Có lỗi khi xử lý với Gemini" });
+    console.error("🔥 LỖI GEMINI:", err?.message || err);
+    res.status(500).json({
+      error: "Gemini error",
+      detail: err?.message || "Unknown error",
+    });
   }
 });
 
+// ======= START SERVER =======
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log("Server Gemini đang chạy ở port", port);

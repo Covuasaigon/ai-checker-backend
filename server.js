@@ -1,4 +1,4 @@
-// server.js dùng Gemini (CommonJS)
+// server.js - AI checker backend dùng Gemini (CommonJS)
 
 const express = require("express");
 const cors = require("cors");
@@ -12,16 +12,15 @@ const app = express();
 // Cho phép JSON body
 app.use(express.json());
 
-// CORS (cả cors() & thủ công cho chắc)
+// CORS cho frontend trên domain khác
 app.use(
   cors({
-    origin: "*",
+    origin: "*", // sau này muốn chặt hơn thì đổi thành 'https://covuasaigon.edu.vn'
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
   })
 );
 
-// CORS thủ công (phòng khi cors middleware không bắt được preflight)
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
@@ -37,13 +36,11 @@ if (!process.env.GEMINI_API_KEY) {
   console.error("⚠️  GEMINI_API_KEY chưa được thiết lập trong env!");
 }
 
-// Khởi tạo Gemini client
+// Khởi tạo Gemini client (dùng model mới)
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-// Dùng model mới, thay cho gemini-1.5-flash (đã bị retire)
 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
-
-// ========= RULE RIÊNG DOANH NGHIỆP =========
+// ========= 1. RULE NGÔN TỪ CẤM / NHẠY CẢM =========
 const forbiddenConfig = {
   facebook: [
     {
@@ -53,8 +50,8 @@ const forbiddenConfig = {
     },
     {
       pattern: /100% khỏi bệnh/gi,
-      reason: "Khẳng định tuyệt đối về sức khoẻ.",
-      suggestion: "Dùng 'giảm nguy cơ', 'hỗ trợ điều trị'…",
+      reason: "Khẳng định tuyệt đối về hiệu quả điều trị.",
+      suggestion: "Dùng 'hỗ trợ điều trị', 'giảm nguy cơ'…",
     },
   ],
   website: [
@@ -75,6 +72,7 @@ function checkForbidden(text, platform) {
     let m;
     while ((m = rule.pattern.exec(text)) !== null) {
       warnings.push({
+        type: "forbidden",
         original: m[0],
         level: "warning",
         reason: rule.reason,
@@ -86,21 +84,112 @@ function checkForbidden(text, platform) {
   return warnings;
 }
 
-// ======= ROUTE TEST =======
+// ========= 2. THÔNG TIN BẮT BUỘC (CẤU HÌNH CỐ ĐỊNH) =========
+// 👉 Tùy chỉnh theo trung tâm của bạn
+const requiredConfig = {
+  facebook: {
+    requiredBranches: [
+      "📍 HỆ THỐNG TRUNG TÂM CỜ VUA SÀI GÒN (SGC)
+🌐 Website: covuasaigon.edu.vn
+📌 Fanpage: facebook.com/covuasaigon.edu.vn
+🏠 N13, Khu Golden Mansion, số 119 Phổ Quang – Phú Nhuận – TP.HCM
+🏡 17 Cơ sở trực thuộc: TP Thủ Đức (Thủ Đức | Quận 9 | Quận 2) | Bình Thạnh | Phú Nhuận | Gò Vấp | Tân Bình | Tân Phú | Bình Tân | Quận 10",
+      
+    ],
+    requiredHotlines: [
+      "0845.700.135",
+      // "0909 888 999",
+    ],
+  },
+  website: {
+    requiredBranches: ["Cờ Vua Sài Gòn"],
+    requiredHotlines: [],
+  },
+  tiktok: {
+    requiredBranches: [],
+    requiredHotlines: [],
+  },
+};
+
+function checkRequired(text, platform) {
+  const cfg = requiredConfig[platform] || {};
+  const warnings = [];
+
+  const contentLower = text.toLowerCase();
+
+  (cfg.requiredBranches || []).forEach((branch) => {
+    if (!contentLower.includes(branch.toLowerCase())) {
+      warnings.push({
+        type: "missing_branch",
+        level: "warning",
+        message: `Bài viết chưa nhắc đến chi nhánh / thương hiệu: "${branch}"`,
+      });
+    }
+  });
+
+  (cfg.requiredHotlines || []).forEach((phone) => {
+    if (!text.includes(phone)) {
+      warnings.push({
+        type: "missing_hotline",
+        level: "warning",
+        message: `Bài viết chưa có hotline: ${phone}`,
+      });
+    }
+  });
+
+  return warnings;
+}
+
+// ========= 3. YÊU CẦU ĐỘNG DO NGƯỜI DÙNG NHẬP =========
+function checkDynamicRequirements(text, requirementsRaw) {
+  if (!requirementsRaw) return [];
+
+  // Mỗi dòng trong ô yêu cầu là 1 rule
+  const lines = requirementsRaw
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  const contentLower = text.toLowerCase();
+  const warnings = [];
+
+  lines.forEach((req) => {
+    const cleanReq = req.replace(/^[-•+]/, "").trim(); // bỏ dấu gạch đầu dòng nếu có
+    if (!cleanReq) return;
+
+    if (!contentLower.includes(cleanReq.toLowerCase())) {
+      warnings.push({
+        type: "missing_requirement",
+        level: "warning",
+        requirement: cleanReq,
+        message: `Bài viết chưa đáp ứng yêu cầu: "${cleanReq}"`,
+      });
+    }
+  });
+
+  return warnings;
+}
+
+// ========= ROUTES =========
+
+// Test route
 app.get("/", (req, res) => {
   res.send("Backend Gemini hoạt động!");
 });
 
-// ======= API CHÍNH /api/check =======
+// API chính
 app.post("/api/check", async (req, res) => {
   try {
-    const { text, platform = "facebook" } = req.body;
+    const { text, platform = "facebook", requirements } = req.body;
 
     if (!text || !text.trim()) {
       return res.status(400).json({ error: "Vui lòng gửi nội dung text" });
     }
 
-    const baseWarnings = checkForbidden(text, platform);
+    // Check rule custom
+    const forbiddenWarnings = checkForbidden(text, platform);
+    const requiredWarnings = checkRequired(text, platform);
+    const dynamicReqWarnings = checkDynamicRequirements(text, requirements);
 
     const prompt = `
 Bạn là trợ lý biên tập nội dung tiếng Việt cho doanh nghiệp.
@@ -131,14 +220,12 @@ BÀI GỐC:
 """${text}"""
 `;
 
-    // Gọi Gemini
     const result = await model.generateContent(prompt);
     const rawText = result.response.text();
 
-    // Thử parse JSON (Gemini đôi khi trả thêm chữ rác quanh JSON)
     let aiData;
     try {
-      // Cố gắng cắt phần JSON thuần nếu cần
+      // cắt phần JSON thuần nếu Gemini trả kèm text
       const firstBrace = rawText.indexOf("{");
       const lastBrace = rawText.lastIndexOf("}");
       const jsonString =
@@ -158,12 +245,13 @@ BÀI GỐC:
       };
     }
 
-    // Gộp kết quả để trả ra frontend
     res.json({
       corrected_text: aiData.corrected_text || text,
       spelling_issues: aiData.spelling_issues || [],
       general_suggestions: aiData.general_suggestions || [],
-      forbidden_warnings: baseWarnings,
+      forbidden_warnings: forbiddenWarnings,
+      required_warnings: requiredWarnings,
+      dynamic_requirements: dynamicReqWarnings,
     });
   } catch (err) {
     console.error("🔥 LỖI GEMINI:", err?.message || err);
@@ -174,7 +262,7 @@ BÀI GỐC:
   }
 });
 
-// ======= START SERVER =======
+// Start server
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log("Server Gemini đang chạy ở port", port);

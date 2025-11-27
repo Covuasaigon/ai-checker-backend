@@ -1,14 +1,24 @@
-// server.js dùng Gemini (CommonJS)
+// server.js - Hỗ trợ 2 chế độ: GEMINI hoặc OLLAMA (local)
+// Chọn bằng biến môi trường MODEL_PROVIDER = "gemini" | "ollama"
+
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
+dotenv.config();
+
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-dotenv.config();
+// ===== CẤU HÌNH NHÀ CUNG CẤP MODEL =====
+const MODEL_PROVIDER = (process.env.MODEL_PROVIDER || "gemini").toLowerCase();
+// GEMINI: dùng GEMINI_API_KEY + GEMINI_MODEL (tuỳ chọn)
+// OLLAMA: dùng OLLAMA_URL (mặc định http://127.0.0.1:11434) + OLLAMA_MODEL (vd: "qwen2.5:7b")
+
+const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen2.5:7b";
 
 const app = express();
 
-// CORS – cho phép gọi từ mọi domain (sau này có thể giới hạn)
+// CORS cho mọi domain (sau này có thể siết lại về domain của trung tâm)
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
@@ -22,11 +32,61 @@ app.use((req, res, next) => {
 app.use(cors());
 app.use(express.json());
 
-// ===== KHỞI TẠO GEMINI =====
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+// ======= HÀM GỌI GEMINI =======
+async function callGemini(prompt) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("Thiếu GEMINI_API_KEY trong .env");
+  }
 
-// ===== RULE NGÔN TỪ CẤM / NHẠY CẢM (ví dụ) =====
+  const modelName =
+    process.env.GEMINI_MODEL || "gemini-2.0-flash-exp";
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: modelName });
+
+  const result = await model.generateContent(prompt);
+  const rawText = result.response.text().trim();
+  return rawText;
+}
+
+// ======= HÀM GỌI OLLAMA LOCAL =======
+// Yêu cầu: chạy ollama + model: "ollama pull qwen2.5:7b" (hoặc model khác)
+async function callOllama(prompt) {
+  const url = `${OLLAMA_URL}/api/generate`;
+
+  const body = {
+    model: OLLAMA_MODEL,
+    prompt: prompt,
+    stream: false,
+  };
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Ollama error: ${response.status} - ${text}`);
+  }
+
+  const data = await response.json();
+  // Ollama thường trả về { response: "...", ... }
+  return (data.response || "").trim();
+}
+
+// ======= HÀM GỌI MODEL CHUNG =======
+async function callModel(prompt) {
+  if (MODEL_PROVIDER === "ollama") {
+    return callOllama(prompt);
+  }
+  // mặc định dùng gemini
+  return callGemini(prompt);
+}
+
+// ===== RULE NGÔN TỪ CẤM / NHẠY CẢM =====
 const forbiddenConfig = {
   facebook: [
     {
@@ -134,7 +194,9 @@ function checkDynamicRequirements(text, requirements) {
 
 // ===== ROUTES =====
 app.get("/", (req, res) => {
-  res.send("Backend Gemini hoạt động!");
+  res.send(
+    `Backend AI Checker đang chạy với provider=${MODEL_PROVIDER.toUpperCase()}`
+  );
 });
 
 app.post("/api/check", async (req, res) => {
@@ -150,18 +212,13 @@ app.post("/api/check", async (req, res) => {
       return res.status(400).json({ error: "Vui lòng gửi nội dung text" });
     }
 
-    // 1. Check rule cứng ở backend
+    // 1. Check rule cứng ở backend (KHÔNG tốn AI)
     const forbiddenWarnings = checkForbidden(text, platform);
     const companyWarnings = checkCompanyInfo(text, selectedChecks);
     const dynamicList = parseRequirementsText(requirementsText);
     const dynamicWarnings = checkDynamicRequirements(text, dynamicList);
 
-    // 2. Gọi Gemini để:
-    //    - sửa chính tả
-    //    - liệt kê lỗi
-    //    - gợi ý tối ưu
-    //    - gợi ý hashtag
-    //    - viết lại bài theo phong cách thân thiện với phụ huynh
+    // 2. Prompt gửi lên model (Gemini / Ollama)
     const prompt = `
 Bạn là trợ lý biên tập nội dung tiếng Việt cho một trung tâm dạy Cờ vua & Vẽ cho trẻ từ 3–15 tuổi.
 Đối tượng chính là phụ huynh, giọng văn cần:
@@ -204,19 +261,18 @@ BÀI GỐC:
 """${text}"""
 `;
 
-    const result = await model.generateContent(prompt);
-    const rawText = result.response.text().trim();
+    const rawText = await callModel(prompt);
 
     let aiData;
     try {
       aiData = JSON.parse(rawText);
     } catch (e) {
-      console.error("Không parse được JSON từ Gemini:", rawText);
+      console.error("Không parse được JSON từ model:", rawText);
       aiData = {
         corrected_text: text,
         spelling_issues: [],
         general_suggestions: [
-          "Gemini không trả về JSON hợp lệ, vui lòng thử lại sau hoặc rút ngắn bài viết.",
+          "Model không trả về JSON hợp lệ, vui lòng thử lại sau hoặc rút ngắn bài viết.",
         ],
         hashtags: [],
         rewrite_text: text,
@@ -229,18 +285,17 @@ BÀI GỐC:
     const hashtags = aiData.hashtags || [];
     const rewriteText = aiData.rewrite_text || correctedText;
 
-    // 3. TÍNH ĐIỂM A/B/C DỰA TRÊN CHECKLIST
-    //    (điểm backend, không phụ thuộc Gemini)
+    // 3. TÍNH ĐIỂM A/B/C DỰA TRÊN CHECKLIST (logic backend, không phụ thuộc model)
     let score = 100;
     const spellCount = spellingIssues.length;
     const forbidCount = forbiddenWarnings.length;
     const companyCount = companyWarnings.length;
     const dynamicCount = dynamicWarnings.length;
 
-    score -= Math.min(spellCount * 5, 30); // tối đa -30 điểm chính tả
-    score -= Math.min(forbidCount * 15, 45); // từ cấm nặng hơn
-    score -= Math.min(companyCount * 8, 24); // thiếu thông tin công ty
-    score -= Math.min(dynamicCount * 5, 25); // thiếu yêu cầu custom
+    score -= Math.min(spellCount * 5, 30);    // tối đa -30 điểm chính tả
+    score -= Math.min(forbidCount * 15, 45);  // từ cấm nặng hơn
+    score -= Math.min(companyCount * 8, 24);  // thiếu thông tin công ty
+    score -= Math.min(dynamicCount * 5, 25);  // thiếu yêu cầu custom
 
     if (score < 0) score = 0;
 
@@ -257,11 +312,13 @@ BÀI GỐC:
 
     // 4. Trả về cho frontend
     res.json({
+      provider: MODEL_PROVIDER,
       corrected_text: correctedText,
       spelling_issues: spellingIssues,
       general_suggestions: generalSuggestions,
       hashtags,
       rewrite_text: rewriteText,
+
       forbidden_warnings: forbiddenWarnings,
       company_warnings: companyWarnings,
       dynamic_requirements: dynamicWarnings,
@@ -273,7 +330,7 @@ BÀI GỐC:
   } catch (err) {
     console.error("LỖI API /api/check:", err);
     res.status(500).json({
-      error: "Có lỗi khi xử lý với Gemini",
+      error: "Có lỗi khi xử lý với AI model",
       detail: err?.message || String(err),
     });
   }
@@ -281,5 +338,7 @@ BÀI GỐC:
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-  console.log("Server Gemini đang chạy ở port", port);
+  console.log(
+    `Server AI Checker đang chạy ở port ${port} với provider=${MODEL_PROVIDER.toUpperCase()}`
+  );
 });

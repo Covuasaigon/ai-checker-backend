@@ -40,7 +40,7 @@ async function callGemini(prompt) {
   }
 
   const modelName =
-    process.env.GEMINI_MODEL || "gemini-1.5-flash";
+    process.env.GEMINI_MODEL || "gemini-pro";
   
 
   const genAI = new GoogleGenerativeAI(apiKey);

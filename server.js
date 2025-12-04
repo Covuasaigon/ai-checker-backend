@@ -126,47 +126,90 @@ BÀI GỐC:
 // ========== PROMPT CHO IMAGE ==========
 function buildImagePrompt() {
   return `
-Bạn là chuyên gia nội dung VÀ thiết kế poster cho một trung tâm dạy Cờ vua & Vẽ cho trẻ từ 3–15 tuổi.
+Bạn là chuyên gia: 
+- Thiết kế đồ hoạ (poster/brochure/banner Facebook),
+- Biên tập nội dung tiếng Việt,
+- Kiểm duyệt hình ảnh truyền thông cho trung tâm dạy Cờ Vua & Vẽ cho trẻ em.
 
-ẢNH ĐÃ ĐÍNH KÈM: là poster/banner truyền thông trên Facebook/website.
+ẢNH ĐÍNH KÈM: là poster quảng cáo.  
+Hãy phân tích thật chính xác **từng chữ trên ảnh** và **không tự bịa nội dung**.
 
-PHẦN 1 – ĐỌC NỘI DUNG:
-1. Đọc toàn bộ chữ xuất hiện trên hình, chép lại thành một đoạn plain_text (giống như gõ lại nội dung chữ trên hình).
+===========================
+PHẦN 1 — OCR: ĐỌC CHỮ TRÊN ẢNH (plain_text)
+===========================
+1. Đọc TẤT CẢ chữ xuất hiện trong poster (dù lớn hay nhỏ).
+2. Chép lại giống 100% như ảnh (không sửa lỗi ở bước này).
+3. Nếu chữ bị thiếu dấu tiếng Việt (ví dụ: "tuyen sinh"), vẫn ghi đúng những gì bạn đọc được.
 
-PHẦN 2 – XỬ LÝ NỘI DUNG (DỰA TRÊN plain_text):
-2. Sửa chính tả, dấu câu, ngữ pháp (trả về "corrected_text").
-3. Liệt kê "spelling_issues" (mỗi lỗi có original, correct, reason ngắn gọn).
-4. Gợi ý "general_suggestions" (tối đa 5 gợi ý, tập trung vào:
-   - Làm rõ thông điệp chính,
-   - Call-to-action cho phụ huynh,
-   - Bố cục nội dung chữ trên poster dễ hiểu hơn).
-5. Gợi ý 5–12 "hashtags" phù hợp (không dấu, bắt đầu bằng #).
+Trả về trong trường **plain_text**.
 
-PHẦN 3 – NHẬN XÉT THIẾT KẾ (design_feedback):
-Hãy trả về mảng "design_feedback" (tối đa 5 gợi ý), mỗi phần tử là 1 câu góp ý rõ ràng, tập trung vào:
+===========================
+PHẦN 2 — XỬ LÝ NỘI DUNG (corrected_text)
+===========================
+Dựa trên nội dung đọc được, hãy:
 
-- BỐ CỤC:
-  + Các khối nội dung có cân đối trái/phải/trên/dưới không?
-  + Tiêu đề chính có nổi bật và dễ nhìn không?
-  + Khoảng cách giữa các dòng, các block có bị quá sát hoặc quá xa không?
-  + Có nên gom nhóm/đổi vị trí một số phần để mắt người xem đi theo thứ tự dễ hiểu hơn không?
+2.1. **Sửa chính tả**, đặc biệt chú ý:
+- Thiếu dấu tiếng Việt (mầm non, tuyển sinh…)
+- Viết hoa / viết thường sai chuẩn
+- Sai tên thương hiệu (Cờ Vua Sài Gòn / Sai Gon Art)
+- Lỗi tách từ / dính chữ
+- Số điện thoại sai định dạng hoặc thiếu số
 
-- MÀU SẮC:
-  + Màu nền và màu chữ có đủ tương phản để đọc dễ không?
-  + Tông màu đang dùng có hài hoà, phù hợp trẻ em và phụ huynh không?
-  + Có khu vực nào quá chói hoặc quá tối làm người xem mỏi mắt không?
-  + Gợi ý 1–2 hướng phối màu (ví dụ: nền sáng + điểm nhấn 1–2 màu chủ đạo).
+2.2. Trả về nội dung sau khi sửa trong trường **corrected_text**.
 
-- CHUYÊN MÔN KHÁC:
-  + Font chữ có thống nhất, dễ đọc với trẻ em và phụ huynh không?
-  + Có dùng quá nhiều kiểu chữ/hiệu ứng (shadow, outline, gradient) gây rối không?
-  + Logo, hotline, thông tin quan trọng có đủ nổi bật nhưng không che khuất nội dung khác không?
-  + Gợi ý cụ thể để nâng cấp poster lên “phiên bản tốt hơn” (ví dụ: giản lược text, tăng khoảng trắng, thêm icon minh hoạ…).
+2.3. Liệt kê các lỗi trong **spelling_issues**:
+Mỗi lỗi có dạng:
+{
+  "original": "...",
+  "correct": "...",
+  "reason": "..."
+}
 
-CHỈ TRẢ VỀ MỘT ĐỐI TƯỢNG JSON CÓ CẤU TRÚC:
+2.4. **general_suggestions** (tối đa 5 gợi ý)
+Tập trung vào:
+- Làm rõ thông điệp chính
+- Định hướng CTA mạnh & rõ ràng cho phụ huynh
+- Giảm trùng lặp, rút gọn các câu dài
+- Tăng tính hấp dẫn với trẻ em
+
+===========================
+PHẦN 3 — NHẬN XÉT THIẾT KẾ (design_feedback)
+===========================
+Hãy đánh giá poster theo chuẩn chuyên gia thiết kế:
+
+— **BỐ CỤC**
+- Các khối nội dung có cân đối trái/phải/trên/dưới không?
+- Đường nhìn (visual flow) có logic không?
+- Tiêu đề có đủ nổi bật không?
+- Khoảng cách giữa các block có bị dính hay quá thưa không?
+- Cần gom nhóm / đổi trật tự phần nào để dễ đọc hơn?
+
+— **MÀU SẮC**
+- Độ tương phản chữ–nền có đủ để đọc dễ không?
+- Tông màu có hài hoà & phù hợp trẻ em không?
+- Có vùng nào quá sáng / tối / chói / nhiễu gây mỏi mắt không?
+- Gợi ý điều chỉnh màu sắc thực tế.
+
+— **FONT & ĐỒ HỌA**
+- Font chữ có đồng nhất không?
+- Có dùng quá nhiều hiệu ứng (shadow/outline/gradient) gây rối không?
+- Logo/hotline có đủ nổi bật nhưng không lấn át nội dung khác?
+- Icon minh hoạ có phù hợp đối tượng là phụ huynh + trẻ em không?
+
+— **GỢI Ý NÂNG CẤP**
+- Rút gọn câu dài, tăng khoảng trắng
+- Thêm icon phù hợp
+- Tăng nhấn mạnh CTA
+- Điều chỉnh bố cục theo nguyên tắc 1/3 hoặc visual hierarchy
+
+Tối đa 5 góp ý chất lượng.
+
+===========================
+⚠️ CHỈ TRẢ VỀ DUY NHẤT ĐỐI TƯỢNG JSON:
+===========================
 
 {
-  "plain_text": "...",          // chữ gõ lại từ poster
+  "plain_text": "...",
   "corrected_text": "...",
   "spelling_issues": [
     { "original": "...", "correct": "...", "reason": "..." }
@@ -182,7 +225,9 @@ CHỈ TRẢ VỀ MỘT ĐỐI TƯỢNG JSON CÓ CẤU TRÚC:
     "..."
   ]
 }
-`;
+
+⚠️ KHÔNG ghi thêm bất cứ câu nào ngoài JSON.
+  `;
 }
 
 

@@ -41,7 +41,7 @@ async function callGemini(prompt) {
   }
 
   const modelName =
-    process.env.GEMINI_MODEL || "gemini-1.5-flash-latest";
+    process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: modelName });

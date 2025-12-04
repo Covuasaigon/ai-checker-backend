@@ -36,10 +36,7 @@ function extractJson(text) {
 }
 
 // ===== HELPER: build prompt chung cho TEXT =====
-function buildTextPrompt({ text, platform, requirementsText, selectedChecks }) {
-  const checksStr = JSON.stringify(selectedChecks || {});
-  const reqStr = requirementsText || "";
-
+function buildTextPrompt(text) {
   return `
 Bạn là trợ lý biên tập nội dung tiếng Việt cho một trung tâm dạy Cờ vua & Vẽ cho trẻ từ 3–15 tuổi.
 Đối tượng chính là phụ huynh, giọng văn cần:
@@ -123,14 +120,7 @@ BÀI GỐC:
 }
 
 // ===== HELPER: build prompt cho IMAGE =====
-function buildImagePrompt({
-  platform,
-  requirementsText,
-  selectedChecks,
-}) {
-  const checksStr = JSON.stringify(selectedChecks || {});
-  const reqStr = requirementsText || "";
-
+function buildImagePrompt() {
   return `
 Bạn là chuyên gia nội dung VÀ thiết kế poster cho một trung tâm dạy Cờ vua & Vẽ cho trẻ từ 3–15 tuổi.
 

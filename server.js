@@ -62,8 +62,12 @@ NHIỆM VỤ:
    - Lịch sự, dễ hiểu cho phụ huynh
    - Không thay đổi thông tin sự kiện / chương trình
    - Có thể dùng các icon bullet như đã nêu ở trên để bài viết sinh động hơn.
+6. Tự chấm điểm:
+   - score: 0–100
+   - grade: "A" | "B" | "C" (A >= 85, B 65–84, C < 65)
+   - score_reason: giải thích ngắn gọn dựa trên chính tả, từ cấm, checklist.
 
-6. FOOTER THÔNG TIN TRUNG TÂM (CHỈ THÊM VÀO "rewrite_text"):
+7. FOOTER THÔNG TIN TRUNG TÂM (CHỈ THÊM VÀO "rewrite_text"):
    - Sau khi viết lại nội dung chính, nếu trong bài gốc hoặc bản viết lại KHÔNG chứa hotline
      "0845.700.135" hoặc "084 502 0038", hãy tự động THÊM MỘT trong hai footer chuẩn dưới đây
      vào cuối đoạn "rewrite_text", cách phần nội dung phía trên bằng một dòng trống.

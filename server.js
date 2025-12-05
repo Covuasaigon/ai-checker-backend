@@ -1,4 +1,4 @@
-// server.js – Backend cho AI Checker (TEXT + IMAGE)
+// server.js – Backend cho AI Checker (text + image)
 
 const express = require("express");
 const cors = require("cors");
@@ -12,128 +12,21 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
 if (!GEMINI_API_KEY) {
-  console.warn("⚠️ Thiếu GEMINI_API_KEY trong biến môi trường! Các endpoint sẽ trả lỗi 500.");
+  console.warn("⚠️ Thiếu GEMINI_API_KEY trong biến môi trường!");
 }
 
-let model = null;
-if (GEMINI_API_KEY) {
-  const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-  model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-}
+const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "12mb" })); // nhận text + base64 image
-
-// ====== RULE NGÔN TỪ CẤM / NHẠY CẢM ======
-const forbiddenConfig = {
-  facebook: [
-    {
-      pattern: /giảm cân cấp tốc/gi,
-      reason: "Cam kết kết quả quá mức, dễ vi phạm chính sách nền tảng.",
-      suggestion: "Dùng 'hỗ trợ kiểm soát cân nặng lành mạnh, khoa học'.",
-    },
-    {
-      pattern: /100% khỏi bệnh/gi,
-      reason: "Khẳng định tuyệt đối về sức khoẻ.",
-      suggestion: "Dùng 'giảm nguy cơ', 'hỗ trợ điều trị'…",
-    },
-  ],
-  website: [
-    {
-      pattern: /sốc/gi,
-      reason: "Ngôn từ giật gân, không phù hợp website chính thức.",
-      suggestion: "Dùng ngôn từ trung tính, chuyên nghiệp hơn.",
-    },
-  ],
-  tiktok: [],
-};
-
-function checkForbidden(text, platform) {
-  const rules = forbiddenConfig[platform] || [];
-  const warnings = [];
-  for (const rule of rules) {
-    let m;
-    while ((m = rule.pattern.exec(text)) !== null) {
-      warnings.push({
-        original: m[0],
-        level: "warning",
-        reason: rule.reason,
-        suggestion: rule.suggestion,
-      });
-    }
-  }
-  return warnings;
-}
-
-// ====== RULE THÔNG TIN CÔNG TY ======
-const companyChecks = {
-  brand: {
-    pattern: /(cờ vua sài gòn|covuasaigon\.edu\.vn|sai gon art|saigonart\.edu\.vn)/i,
-    message: 'Nên nhắc đến tên trung tâm "Cờ Vua Sài Gòn" hoặc "Sai Gon Art" / domain.',
-  },
-  branch: {
-    pattern: /(chi nhánh|cơ sở|campus|cs[0-9]+)/i,
-    message: "Nên ghi ít nhất một chi nhánh / cơ sở để phụ huynh biết địa điểm.",
-  },
-  hotline: {
-    pattern: /(0845\.700\.135|084 ?502 ?0038|hotline|điện thoại liên hệ)/i,
-    message: "Nên có hotline / số điện thoại để phụ huynh liên hệ.",
-  },
-  slogan: {
-    pattern: /(tư duy logic|khơi gợi sáng tạo|cùng con lớn lên|slogan)/i,
-    message:
-      "Có thể thêm câu slogan / thông điệp thương hiệu để bài viết ấn tượng hơn.",
-  },
-  service: {
-    pattern: /(lớp cờ vua|khóa học cờ vua|lớp vẽ|khóa học vẽ|chương trình học)/i,
-    message: "Nên nhắc rõ dịch vụ: lớp cờ vua, lớp vẽ hoặc chương trình học.",
-  },
-};
-
-function checkCompanyInfo(text, selectedChecks = {}) {
-  const warnings = [];
-  for (const key of Object.keys(companyChecks)) {
-    if (!selectedChecks[key]) continue; // checkbox nào không chọn thì bỏ qua
-    const cfg = companyChecks[key];
-    if (!cfg.pattern.test(text)) {
-      warnings.push({
-        type: key,
-        message: cfg.message,
-      });
-    }
-  }
-  return warnings;
-}
-
-// ====== YÊU CẦU CUSTOM ======
-function parseRequirementsText(raw) {
-  if (!raw) return [];
-  return raw
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-}
-
-function checkDynamicRequirements(text, requirements) {
-  const lower = text.toLowerCase();
-  const warnings = [];
-  (requirements || []).forEach((req) => {
-    if (!lower.includes(req.toLowerCase())) {
-      warnings.push({
-        requirement: req,
-        message: `Bài viết chưa đáp ứng yêu cầu: "${req}"`,
-      });
-    }
-  });
-  return warnings;
-}
+app.use(express.json({ limit: "12mb" })); // để nhận base64 image
 
 // ===== HELPER: bóc JSON từ output của model =====
 function extractJson(text) {
   if (!text) throw new Error("Model không trả về nội dung.");
 
-  // Nếu Gemini bọc trong ```json ... ``` hoặc ``` ... ```
+  // Nếu Gemini bọc trong ```json ... ```
   const fence =
     text.match(/```json([\s\S]*?)```/i) ||
     text.match(/```([\s\S]*?)```/i);
@@ -142,7 +35,7 @@ function extractJson(text) {
   return JSON.parse(jsonStr);
 }
 
-// ===== PROMPT TEXT =====
+// ===== HELPER: build prompt chung cho TEXT =====
 function buildTextPrompt(payload) {
   const text =
     typeof payload === "string" ? payload : (payload && payload.text) || "";
@@ -231,71 +124,73 @@ BÀI GỐC:
 `;
 }
 
-// ===== PROMPT IMAGE =====
+// ===== HELPER: build prompt cho IMAGE =====
 function buildImagePrompt() {
   return `
-Bạn là chuyên gia: 
-- Thiết kế đồ hoạ (poster/brochure/banner Facebook),
-- Biên tập nội dung tiếng Việt,
-- Kiểm duyệt hình ảnh truyền thông cho trung tâm dạy Cờ Vua & Vẽ cho trẻ em.
+Bạn là chuyên gia thiết kế và biên tập nội dung. Nhiệm vụ của bạn:
 
-ẢNH ĐÍNH KÈM: là poster quảng cáo.  
-Hãy phân tích thật chính xác từng chữ trên ảnh và không tự bịa nội dung.
+🔥 QUAN TRỌNG:
+- Chỉ trả về JSON đúng cấu trúc. 
+- Tuyệt đối KHÔNG viết thêm lời dẫn, không giải thích vòng ngoài.
 
 ===========================
-PHẦN 1 — OCR: ĐỌC CHỮ TRÊN ẢNH (plain_text)
+PHẦN 1 — OCR (plain_text)
 ===========================
-1. Đọc TẤT CẢ chữ xuất hiện trong poster (dù lớn hay nhỏ).
-2. Chép lại giống 100% như ảnh (không sửa lỗi ở bước này).
-3. Nếu chữ bị thiếu dấu tiếng Việt (ví dụ: "tuyen sinh"), vẫn ghi đúng những gì bạn đọc được.
-
-Trả về trong trường "plain_text".
+• Đọc TẤT CẢ chữ trên poster (gồm chữ nhỏ, chữ mờ, chữ thiếu dấu).
+• Chép lại y chang (không sửa lỗi).
+• Nếu chữ bị thiếu dấu (“tuyen sinh”, “mam non”), vẫn giữ nguyên.
 
 ===========================
-PHẦN 2 — XỬ LÝ NỘI DUNG (corrected_text)
+PHẦN 2 — XỬ LÝ NỘI DUNG
 ===========================
-- Sửa chính tả, dấu câu, ngữ pháp (đặc biệt tiếng Việt có dấu).
-- Chú ý các từ như "tuyen sinh" -> "Tuyển sinh", "mam non" -> "Mầm non", v.v.
-- Trả về nội dung đã sửa trong "corrected_text".
-- Liệt kê lỗi trong "spelling_issues": { original, correct, reason }.
-- Đưa ra "general_suggestions" tối đa 5 ý.
-- Gợi ý 5–12 "hashtags" (không dấu, bắt đầu bằng #).
-- Viết lại nội dung trên poster cho phù hợp bài đăng, trong "rewrite_text".
+Trên cơ sở đoạn plain_text:
+
+corrected_text:
+• Sửa lỗi chính tả, đặc biệt lỗi dấu tiếng Việt.
+• Chuẩn hóa cách viết hoa.
+
+spelling_issues:
+• Liệt kê từng lỗi chính tả, theo dạng:
+  { "original": "...", "correct": "...", "reason": "..." }
+
+general_suggestions: (tối đa 5)
+• Góp ý cách rõ thông điệp, giảm chữ thừa, CTA rõ hơn.
+
+hashtags:
+• Gợi ý 5–12 hashtag (không dấu).
+
+rewrite_text:
+• Viết lại nội dung trong ảnh theo phiên bản đăng Facebook.
 
 ===========================
-PHẦN 3 — NHẬN XÉT THIẾT KẾ (design_feedback)
+PHẦN 3 — GÓP Ý THIẾT KẾ (design_feedback)
 ===========================
-Đánh giá poster về:
-- Bố cục: cân đối trái/phải/trên/dưới, khoảng cách các block, độ nổi bật tiêu đề, đường nhìn.
-- Màu sắc: tương phản chữ–nền, tông màu hài hoà, có vùng quá chói hoặc quá tối không.
-- Font & đồ hoạ: số lượng font, hiệu ứng, độ dễ đọc, mức độ nổi bật của logo/hotline.
-- Gợi ý nâng cấp cụ thể (tối đa 5 ý): rút gọn text, tăng khoảng trắng, thêm icon phù hợp, điều chỉnh màu/ vị trí.
+Tối đa 5 góp ý:
+• Bố cục (cân đối, khoảng cách, thứ tự nhìn).
+• Màu sắc (tương phản, độ sáng).
+• Font chữ (đồng nhất, dễ đọc).
+• Icon minh hoạ phù hợp.
+• Thay đổi để poster hấp dẫn hơn.
 
-CHỈ TRẢ VỀ MỘT ĐỐI TƯỢNG JSON:
+===========================
+🔥 CHỈ TRẢ VỀ JSON DƯỚI ĐÂY 🔥
+===========================
 
 {
-  "plain_text": "...",
-  "corrected_text": "...",
-  "spelling_issues": [
-    { "original": "...", "correct": "...", "reason": "..." }
-  ],
-  "general_suggestions": [
-    "..."
-  ],
-  "hashtags": [
-    "#..."
-  ],
-  "rewrite_text": "...",
-  "design_feedback": [
-    "..."
-  ]
+  "plain_text": "",
+  "corrected_text": "",
+  "spelling_issues": [],
+  "general_suggestions": [],
+  "hashtags": [],
+  "rewrite_text": "",
+  "design_feedback": []
 }
 
-Không ghi thêm bất cứ nội dung nào ngoài JSON.
 `;
 }
 
-// ===== HELPER: chuẩn hoá dữ liệu trả về =====
+
+// ===== HELPER: chuẩn hoá dữ liệu trả về (đảm bảo luôn có đủ field) =====
 function normalizeResponse(obj, fallbackText = "") {
   const data = obj || {};
   return {
@@ -317,12 +212,6 @@ function normalizeResponse(obj, fallbackText = "") {
 // ===== ROUTE: CHECK TEXT =====
 app.post("/api/check", async (req, res) => {
   try {
-    if (!model) {
-      return res
-        .status(500)
-        .json({ error: "Server chưa cấu hình GEMINI_API_KEY." });
-    }
-
     const {
       text,
       platform = "facebook",
@@ -334,14 +223,13 @@ app.post("/api/check", async (req, res) => {
       return res.status(400).json({ error: "Vui lòng gửi nội dung text." });
     }
 
-    // 1. RULE BACKEND (không tốn AI)
-    const forbiddenWarnings = checkForbidden(text, platform);
-    const companyWarnings = checkCompanyInfo(text, selectedChecks);
-    const dynamicList = parseRequirementsText(requirementsText);
-    const dynamicWarnings = checkDynamicRequirements(text, dynamicList);
+    const prompt = buildTextPrompt({
+      text,
+      platform,
+      requirementsText,
+      selectedChecks,
+    });
 
-    // 2. Gọi model
-    const prompt = buildTextPrompt({ text });
     const result = await model.generateContent(prompt);
     const raw = result.response.text().trim();
 
@@ -351,51 +239,23 @@ app.post("/api/check", async (req, res) => {
     } catch (e) {
       console.error("❌ Lỗi parse JSON (TEXT):", e.message);
       console.error("RAW:", raw);
+      // fallback đơn giản
       parsed = {
         corrected_text: text,
         spelling_issues: [],
+        forbidden_warnings: [],
+        company_warnings: [],
+        dynamic_requirements: [],
         general_suggestions: ["Model không trả về JSON hợp lệ."],
         hashtags: [],
         rewrite_text: text,
+        score: null,
+        grade: null,
+        score_reason: "",
       };
     }
 
-    let data = normalizeResponse(parsed, text);
-
-    // Gắn lại các cảnh báo từ backend
-    data.forbidden_warnings = forbiddenWarnings;
-    data.company_warnings = companyWarnings;
-    data.dynamic_requirements = dynamicWarnings;
-
-    // 3. CHẤM ĐIỂM A/B/C Ở BACKEND
-    let score = 100;
-    const spellCount = data.spelling_issues.length;
-    const forbidCount = forbiddenWarnings.length;
-    const companyCount = companyWarnings.length;
-    const dynamicCount = dynamicWarnings.length;
-
-    score -= Math.min(spellCount * 5, 30);   // tối đa -30
-    score -= Math.min(forbidCount * 15, 45); // từ cấm nặng hơn
-    score -= Math.min(companyCount * 8, 24); // thiếu thông tin công ty
-    score -= Math.min(dynamicCount * 5, 25); // thiếu yêu cầu custom
-
-    if (score < 0) score = 0;
-
-    let grade = "A";
-    if (score < 65) grade = "C";
-    else if (score < 85) grade = "B";
-
-    const scoreReason = [
-      `Lỗi chính tả: ${spellCount}`,
-      `Từ cấm / nhạy cảm: ${forbidCount}`,
-      `Thiếu thông tin công ty: ${companyCount}`,
-      `Thiếu yêu cầu custom: ${dynamicCount}`,
-    ].join(" · ");
-
-    data.score = score;
-    data.grade = grade;
-    data.score_reason = scoreReason;
-
+    const data = normalizeResponse(parsed, text);
     res.json(data);
   } catch (err) {
     console.error("LỖI /api/check:", err);
@@ -409,19 +269,18 @@ app.post("/api/check", async (req, res) => {
 // ===== ROUTE: CHECK IMAGE =====
 app.post("/api/check-image", async (req, res) => {
   try {
-    if (!model) {
-      return res
-        .status(500)
-        .json({ error: "Server chưa cấu hình GEMINI_API_KEY." });
-    }
-
-    const { imageBase64 } = req.body || {};
+    const {
+      imageBase64,
+      platform = "facebook",
+      requirementsText = "",
+      selectedChecks = {},
+    } = req.body || {};
 
     if (!imageBase64) {
       return res.status(400).json({ error: "Thiếu imageBase64." });
     }
 
-    // Tách header dataURL
+    // tách header dataURL
     let mimeType = "image/png";
     let base64Data = imageBase64;
 
@@ -431,7 +290,11 @@ app.post("/api/check-image", async (req, res) => {
       base64Data = m[2];
     }
 
-    const prompt = buildImagePrompt();
+    const prompt = buildImagePrompt({
+      platform,
+      requirementsText,
+      selectedChecks,
+    });
 
     const result = await model.generateContent({
       contents: [
@@ -461,30 +324,20 @@ app.post("/api/check-image", async (req, res) => {
       parsed = {
         corrected_text: "",
         spelling_issues: [],
-        general_suggestions: [
-          "Model không trả về JSON hợp lệ cho hình ảnh.",
-        ],
+        forbidden_warnings: [],
+        company_warnings: [],
+        dynamic_requirements: [],
+        general_suggestions: ["Model không trả về JSON hợp lệ cho hình ảnh."],
         design_feedback: [],
         hashtags: [],
         rewrite_text: "",
+        score: null,
+        grade: null,
+        score_reason: "",
       };
     }
 
-    let data = normalizeResponse(parsed, "");
-
-    // Chấm điểm đơn giản cho IMAGE (chỉ dựa trên lỗi chính tả)
-    const spellCount = data.spelling_issues.length;
-    let score = 100 - Math.min(spellCount * 5, 40);
-    if (score < 0) score = 0;
-
-    let grade = "A";
-    if (score < 65) grade = "C";
-    else if (score < 85) grade = "B";
-
-    data.score = score;
-    data.grade = grade;
-    data.score_reason = `Lỗi chính tả trên poster: ${spellCount}`;
-
+    const data = normalizeResponse(parsed, "");
     res.json(data);
   } catch (err) {
     console.error("LỖI /api/check-image:", err);

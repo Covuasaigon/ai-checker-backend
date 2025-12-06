@@ -1,4 +1,4 @@
-// server.js – Backend cho AI Checker (text + image)
+// server.js - Backend AI Checker (TEXT + IMAGE, Gemini)
 
 const express = require("express");
 const cors = require("cors");
@@ -9,7 +9,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 // ===== CẤU HÌNH GEMINI =====
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 
 if (!GEMINI_API_KEY) {
   console.warn("⚠️ Thiếu GEMINI_API_KEY trong biến môi trường!");
@@ -18,24 +18,157 @@ if (!GEMINI_API_KEY) {
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
+// ===== EXPRESS APP =====
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "12mb" })); // để nhận base64 image
 
-// ===== HELPER: bóc JSON từ output của model =====
-function extractJson(text) {
-  if (!text) throw new Error("Model không trả về nội dung.");
+// ===================================================================
+// 1. CÁC RULE/CHECKLIST BACKEND (KHÔNG TỐN AI)
+// ===================================================================
 
-  // Nếu Gemini bọc trong ```json ... ``` hoặc ``` ... ```
-  const fence =
-    text.match(/```json([\s\S]*?)```/i) ||
-    text.match(/```([\s\S]*?)```/i);
+// Từ/cụm từ nên tránh theo từng platform
+const forbiddenConfig = {
+  facebook: [
+    {
+      pattern: /giảm cân cấp tốc/gi,
+      reason: "Cam kết kết quả quá mức, dễ vi phạm chính sách nền tảng.",
+      suggestion: "Dùng 'hỗ trợ kiểm soát cân nặng lành mạnh, khoa học'.",
+    },
+    {
+      pattern: /100% khỏi bệnh/gi,
+      reason: "Khẳng định tuyệt đối về sức khỏe.",
+      suggestion: "Dùng 'giảm nguy cơ', 'hỗ trợ điều trị'…",
+    },
+  ],
+  website: [
+    {
+      pattern: /sốc/gi,
+      reason: "Ngôn từ giật gân, không phù hợp website chính thức.",
+      suggestion: "Dùng ngôn từ trung tính, chuyên nghiệp hơn.",
+    },
+  ],
+  tiktok: [],
+};
 
-  const jsonStr = (fence ? fence[1] : text).trim();
-  return JSON.parse(jsonStr);
+function checkForbidden(text, platform) {
+  const rules = forbiddenConfig[platform] || [];
+  const warnings = [];
+
+  for (const rule of rules) {
+    let m;
+    while ((m = rule.pattern.exec(text)) !== null) {
+      warnings.push({
+        original: m[0],
+        level: "warning",
+        reason: rule.reason,
+        suggestion: rule.suggestion,
+      });
+    }
+  }
+  return warnings;
 }
 
-// ===== PROMPT TEXT =====
+// Checklist thông tin công ty (Cờ Vua Sài Gòn / Sai Gon Art)
+const companyChecks = {
+  brand: {
+    pattern: /(cờ vua sài gòn|covuasaigon\.edu\.vn|sai gon art|saigonart\.edu\.vn)/i,
+    message: 'Nên nhắc đến tên trung tâm "Cờ Vua Sài Gòn" hoặc "Sai Gon Art" / domain.',
+  },
+  branch: {
+    pattern: /(chi nhánh|cơ sở|campus|cs[0-9]+)/i,
+    message:
+      "Nên ghi ít nhất một chi nhánh / cơ sở để phụ huynh biết địa điểm.",
+  },
+  hotline: {
+    pattern: /(0845\.?700\.?135|084\s?502\s?0038|hotline|điện thoại liên hệ)/i,
+    message: "Nên có hotline / số điện thoại để phụ huynh liên hệ.",
+  },
+  slogan: {
+    pattern: /(tư duy logic|khơi gợi sáng tạo|cùng con lớn lên|slogan)/i,
+    message:
+      "Có thể thêm câu slogan / thông điệp thương hiệu để bài viết ấn tượng hơn.",
+  },
+  service: {
+    pattern:
+      /(lớp cờ vua|khóa học cờ vua|lớp vẽ|khóa học vẽ|chương trình học|mầm non)/i,
+    message:
+      "Nên nhắc rõ dịch vụ: lớp cờ vua, lớp vẽ hoặc chương trình học cho bé.",
+  },
+};
+
+function checkCompanyInfo(text, selectedChecks = {}) {
+  const warnings = [];
+  for (const key of Object.keys(companyChecks)) {
+    if (!selectedChecks[key]) continue; // checkbox nào không chọn thì bỏ qua
+    const cfg = companyChecks[key];
+    if (!cfg.pattern.test(text)) {
+      warnings.push({
+        type: key,
+        message: cfg.message,
+      });
+    }
+  }
+  return warnings;
+}
+
+// YÊU CẦU CUSTOM (nhập tay + file)
+function parseRequirementsText(raw) {
+  if (!raw) return [];
+  return raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+}
+
+function checkDynamicRequirements(text, requirements) {
+  const lower = (text || "").toLowerCase();
+  const warnings = [];
+  requirements.forEach((req) => {
+    if (!lower.includes(req.toLowerCase())) {
+      warnings.push({
+        requirement: req,
+        message: `Bài viết chưa đáp ứng yêu cầu: "${req}"`,
+      });
+    }
+  });
+  return warnings;
+}
+
+// ===================================================================
+// 2. TÍNH ĐIỂM A/B/C Ở BACKEND
+// ===================================================================
+function computeScore({
+  spellingCount,
+  forbidCount,
+  companyCount,
+  dynamicCount,
+}) {
+  let score = 100;
+  score -= Math.min(spellingCount * 5, 30); // tối đa -30 điểm chính tả
+  score -= Math.min(forbidCount * 15, 45); // từ cấm nặng hơn
+  score -= Math.min(companyCount * 8, 24); // thiếu thông tin công ty
+  score -= Math.min(dynamicCount * 5, 25); // thiếu yêu cầu custom
+
+  if (score < 0) score = 0;
+
+  let grade = "A";
+  if (score < 65) grade = "C";
+  else if (score < 85) grade = "B";
+
+  const scoreReason = [
+    `Lỗi chính tả: ${spellingCount}`,
+    `Từ cấm / nhạy cảm: ${forbidCount}`,
+    `Thiếu thông tin công ty: ${companyCount}`,
+    `Thiếu yêu cầu custom: ${dynamicCount}`,
+  ].join(" · ");
+
+  return { score, grade, scoreReason };
+}
+
+// ===================================================================
+// 3. PROMPT TEXT
+// ===================================================================
 function buildTextPrompt(text) {
   return `
 Bạn là trợ lý biên tập nội dung tiếng Việt cho một trung tâm dạy Cờ vua & Vẽ cho trẻ từ 3–15 tuổi.
@@ -46,33 +179,27 @@ Bạn là trợ lý biên tập nội dung tiếng Việt cho một trung tâm d
 - Phù hợp cho môi trường giáo dục, an toàn cho trẻ em
 
 QUY ĐỊNH VỀ ĐỊNH DẠNG:
-- KHÔNG dùng markdown kiểu **đậm**, __, #, * hoặc các ký hiệu markdown.
+- KHÔNG dùng markdown kiểu **đậm**, __, #, * hoặc các ký hiệu markdown tương tự.
 - Nếu muốn làm nổi bật ý, hãy dùng icon/bullet phù hợp, ví dụ:
   "📌", "✨", "🎨", "🧠", "♟️", "👉", "•"...
 - Mỗi ý chính nên nằm trên một dòng riêng, có thể bắt đầu bằng icon đó.
 - Không tự ý chèn code, JSON hoặc chú thích kỹ thuật vào nội dung bài viết.
 
 NHIỆM VỤ:
-1. Sửa chính tả, dấu câu, ngữ pháp cho bài viết, giữ nguyên ý chính
-   → ghi vào "corrected_text".
-2. Liệt kê các lỗi chính tả đã sửa (mỗi lỗi gồm: original, correct, reason ngắn gọn)
-   → mảng "spelling_issues".
-3. Đưa ra gợi ý tối ưu nội dung (tối đa 5 gợi ý, dạng câu ngắn dễ hiểu)
-   → mảng "general_suggestions".
-4. Gợi ý 5–12 hashtag phù hợp cho bài viết về Cờ vua / Vẽ / giáo dục trẻ em
-   (không dấu, bắt đầu bằng #, ví dụ: #covuasaigon, #lopcovua, #treem)
-   → mảng "hashtags".
+1. Sửa chính tả, dấu câu, ngữ pháp cho bài viết, giữ nguyên ý chính.
+2. Liệt kê các lỗi chính tả đã sửa (mỗi lỗi gồm: original, correct, reason ngắn gọn).
+3. Đưa ra gợi ý tối ưu nội dung (tối đa 5 gợi ý, dạng câu ngắn dễ hiểu).
+4. Gợi ý từ 5–12 hashtag phù hợp cho bài viết về Cờ vua / Vẽ / giáo dục trẻ em (không có dấu, bắt đầu bằng #).
 5. Viết lại toàn bộ bài theo phong cách:
    - Vui tươi, ấm áp, khích lệ các bé
    - Lịch sự, dễ hiểu cho phụ huynh
    - Không thay đổi thông tin sự kiện / chương trình
-   - Có thể dùng các icon bullet như đã nêu ở trên để bài viết sinh động hơn
-   → ghi vào "rewrite_text".
+   - Có thể dùng các icon bullet như đã nêu ở trên để bài viết sinh động hơn.
 
 6. FOOTER THÔNG TIN TRUNG TÂM (CHỈ THÊM VÀO "rewrite_text"):
    - Sau khi viết lại nội dung chính, nếu trong bài gốc hoặc bản viết lại KHÔNG chứa hotline
      "0845.700.135" hoặc "084 502 0038", hãy tự động THÊM MỘT trong hai footer chuẩn dưới đây
-     vào cuối "rewrite_text", cách phần nội dung phía trên bằng một dòng trống.
+     vào cuối đoạn "rewrite_text", cách phần nội dung phía trên bằng một dòng trống.
 
    [FOOTER_COVUA]
    📍 HỆ THỐNG TRUNG TÂM CỜ VUA SÀI GÒN (SGC)
@@ -93,11 +220,12 @@ NHIỆM VỤ:
    🏙️ Tân Bình • Tân Phú • Bình Tân • Quận 10
 
    QUY TẮC CHỌN FOOTER:
-   - Nếu nội dung chủ yếu nói về cờ vua → dùng [FOOTER_COVUA].
-   - Nếu nội dung chủ yếu nói về vẽ / mỹ thuật → dùng [FOOTER_VE].
-   - Nếu nói về cả cờ vua lẫn vẽ → dùng CẢ HAI footer (Cờ vua trước, Vẽ sau).
-   - Nếu không rõ ràng, mặc định dùng [FOOTER_COVUA].
-   - Nếu bài gốc đã có đủ thông tin tương đương, có thể chuẩn hóa lại cho đẹp hơn.
+   - Nếu nội dung chủ yếu nói về "cờ vua, chess, kỳ thủ, quân cờ, ván cờ" => dùng [FOOTER_COVUA].
+   - Nếu nội dung chủ yếu nói về "vẽ, hội họa, mỹ thuật, art, tranh" => dùng [FOOTER_VE].
+   - Nếu bài nói về CẢ HAI (vừa cờ vua vừa vẽ) => dùng CẢ HAI footer, trong đó [FOOTER_COVUA] viết trước.
+   - Nếu nội dung không rõ ràng, mặc định dùng [FOOTER_COVUA].
+   - Nếu trong bài gốc đã có đủ các thông tin trong footer (hotline, website, địa chỉ),
+     thì KHÔNG thêm footer trùng lặp nữa, nhưng có thể chỉnh lại cho đồng bộ format như trên.
 
 CHỈ TRẢ VỀ DUY NHẤT MỘT ĐỐI TƯỢNG JSON VỚI CẤU TRÚC CHÍNH XÁC:
 
@@ -115,20 +243,26 @@ CHỈ TRẢ VỀ DUY NHẤT MỘT ĐỐI TƯỢNG JSON VỚI CẤU TRÚC CHÍNH 
   "rewrite_text": "..."
 }
 
+Nếu không có lỗi chính tả, trả về "spelling_issues": [].
+Nếu không có gợi ý, trả về "general_suggestions": [].
+Nếu không cần hashtag, vẫn trả về "hashtags": [].
+
 BÀI GỐC:
 """${text}"""
 `;
 }
 
-// ===== PROMPT IMAGE =====
+// ===================================================================
+// 4. PROMPT IMAGE (OCR + DESIGN FEEDBACK)
+// ===================================================================
 function buildImagePrompt() {
   return `
-Bạn là chuyên gia: 
+Bạn là chuyên gia:
 - Thiết kế đồ hoạ (poster/brochure/banner Facebook),
 - Biên tập nội dung tiếng Việt,
 - Kiểm duyệt hình ảnh truyền thông cho trung tâm dạy Cờ Vua & Vẽ cho trẻ em.
 
-ẢNH ĐÍNH KÈM: là poster quảng cáo.  
+ẢNH ĐÍNH KÈM: là poster quảng cáo.
 Hãy phân tích thật chính xác TỪNG CHỮ trên ảnh và KHÔNG tự bịa nội dung.
 
 ===========================
@@ -138,72 +272,33 @@ PHẦN 1 — OCR: ĐỌC CHỮ TRÊN ẢNH (plain_text)
 2. Chép lại giống 100% như ảnh (không sửa lỗi ở bước này).
 3. Nếu chữ bị thiếu dấu tiếng Việt (ví dụ: "tuyen sinh"), vẫn ghi đúng những gì bạn đọc được.
 
-→ Trả về trong trường "plain_text".
+Trả về trong trường "plain_text".
 
 ===========================
 PHẦN 2 — XỬ LÝ NỘI DUNG (corrected_text)
 ===========================
-Dựa trên nội dung đọc được, hãy:
-
-2.1. Sửa chính tả, đặc biệt chú ý:
-- Thiếu dấu tiếng Việt (mầm non, tuyển sinh…)
-- Viết hoa / viết thường sai chuẩn
-- Sai tên thương hiệu (Cờ Vua Sài Gòn / Sai Gon Art)
-- Lỗi tách từ / dính chữ
-- Số điện thoại sai định dạng hoặc thiếu số
-
-→ Trả nội dung sau khi sửa vào "corrected_text".
-
-2.2. Liệt kê các lỗi vào "spelling_issues":
-Mỗi lỗi có dạng:
-{ "original": "...", "correct": "...", "reason": "..." }
-
-2.3. "general_suggestions" (tối đa 5 gợi ý)
-Tập trung vào:
-- Làm rõ thông điệp chính
-- Định hướng CTA mạnh & rõ ràng cho phụ huynh
-- Giảm trùng lặp, rút gọn các câu dài
-- Tăng tính hấp dẫn với trẻ em
-
-2.4. "hashtags": gợi ý 5–12 hashtag không dấu, bắt đầu bằng #.
-
-2.5. "rewrite_text": nếu phù hợp, bạn có thể gợi ý một phiên bản nội dung text ngắn gọn, dễ đọc dùng cho caption đi kèm poster.
+- Sửa chính tả, dấu câu, ngữ pháp.
+- Đặc biệt chú ý trường hợp thiếu dấu tiếng Việt (mầm non → mầm non, tuyen sinh → tuyển sinh…).
+- Trả về nội dung sau khi sửa trong "corrected_text".
+- Liệt kê các lỗi trong "spelling_issues": mỗi lỗi có "original", "correct", "reason".
+- "general_suggestions": tối đa 5 gợi ý để tối ưu nội dung poster (rõ thông điệp, CTA, rút gọn câu dài).
 
 ===========================
 PHẦN 3 — NHẬN XÉT THIẾT KẾ (design_feedback)
 ===========================
-Hãy đánh giá poster theo chuẩn chuyên gia thiết kế:
-
-— BỐ CỤC
-- Các khối nội dung có cân đối trái/phải/trên/dưới không?
-- Đường nhìn (visual flow) có logic không?
-- Tiêu đề có đủ nổi bật không?
-- Khoảng cách giữa các block có bị dính hay quá thưa không?
-- Cần gom nhóm / đổi trật tự phần nào để dễ đọc hơn?
-
-— MÀU SẮC
-- Độ tương phản chữ–nền có đủ để đọc dễ không?
-- Tông màu có hài hoà & phù hợp trẻ em không?
-- Có vùng nào quá sáng / tối / chói / nhiễu gây mỏi mắt không?
-- Gợi ý điều chỉnh màu sắc thực tế.
-
-— FONT & ĐỒ HỌA
-- Font chữ có đồng nhất không?
-- Có dùng quá nhiều hiệu ứng (shadow/outline/gradient) gây rối không?
-- Logo/hotline có đủ nổi bật nhưng không lấn át nội dung khác?
-- Icon minh hoạ có phù hợp đối tượng là phụ huynh + trẻ em không?
-
-— GỢI Ý NÂNG CẤP
-- Rút gọn câu dài, tăng khoảng trắng
-- Thêm icon phù hợp
-- Tăng nhấn mạnh CTA
-- Điều chỉnh bố cục theo nguyên tắc 1/3 hoặc visual hierarchy
-
-Tối đa 5 góp ý chất lượng → mảng "design_feedback".
+Hãy trả về mảng "design_feedback" (tối đa 5 gợi ý), tập trung vào:
+- Bố cục: cân đối trái/phải/trên/dưới, khoảng cách, thứ tự đọc.
+- Màu sắc: độ tương phản chữ–nền, tông màu có hài hoà, phù hợp trẻ em.
+- Font & đồ hoạ: số lượng font, hiệu ứng, logo/hotline có đủ nổi bật không.
+- Gợi ý cụ thể để nâng cấp poster (rút gọn text, tăng khoảng trắng, thêm icon minh hoạ…).
 
 ===========================
-CHỈ TRẢ VỀ DUY NHẤT ĐỐI TƯỢNG JSON:
+PHẦN 4 — HASHTAG & VIẾT LẠI (tùy chọn)
 ===========================
+- "hashtags": mảng 5–12 hashtag không dấu, bắt đầu bằng #, liên quan cờ vua / vẽ / giáo dục.
+- "rewrite_text": nếu có thể, viết lại nội dung chữ chính của poster theo phong cách thân thiện với phụ huynh (không bắt buộc phải có).
+
+⚠️ CHỈ TRẢ VỀ DUY NHẤT ĐỐI TƯỢNG JSON VỚI CẤU TRÚC:
 
 {
   "plain_text": "...",
@@ -222,15 +317,16 @@ CHỈ TRẢ VỀ DUY NHẤT ĐỐI TƯỢNG JSON:
     "..."
   ]
 }
-
-KHÔNG ghi thêm bất cứ câu nào ngoài JSON.
 `;
 }
 
-// ===== HELPER: chuẩn hoá dữ liệu trả về (đảm bảo luôn có đủ field) =====
+// ===================================================================
+// 5. HELPER CHUẨN HOÁ DỮ LIỆU TRẢ VỀ
+// ===================================================================
 function normalizeResponse(obj, fallbackText = "") {
   const data = obj || {};
   return {
+    plain_text: data.plain_text || "",
     corrected_text: data.corrected_text || fallbackText,
     spelling_issues: data.spelling_issues || [],
     forbidden_warnings: data.forbidden_warnings || [],
@@ -240,78 +336,81 @@ function normalizeResponse(obj, fallbackText = "") {
     design_feedback: data.design_feedback || [],
     hashtags: data.hashtags || [],
     rewrite_text: data.rewrite_text || fallbackText,
-    plain_text: data.plain_text || "",
+    score: typeof data.score === "number" ? data.score : null,
+    grade: data.grade || null,
+    score_reason: data.score_reason || "",
   };
 }
 
-// ===== HELPER: chấm điểm A/B/C ở backend =====
-function addScoreInfo(data, { isImage = false } = {}) {
-  const spellingCount = (data.spelling_issues || []).length;
-  const forbiddenCount = (data.forbidden_warnings || []).length;
-  const companyCount = (data.company_warnings || []).length;
-  const dynamicCount = (data.dynamic_requirements || []).length;
-
-  let score = 100;
-  score -= Math.min(spellingCount * 5, 30);   // tối đa -30 điểm do lỗi chính tả
-  score -= Math.min(forbiddenCount * 15, 45); // từ cấm nặng hơn
-  score -= Math.min(companyCount * 8, 24);
-  score -= Math.min(dynamicCount * 5, 25);
-  if (score < 0) score = 0;
-
-  let grade = "A";
-  if (score < 65) grade = "C";
-  else if (score < 85) grade = "B";
-
-  const scoreReason = isImage
-    ? `Lỗi chính tả trên poster: ${spellingCount}`
-    : [
-        `Lỗi chính tả: ${spellingCount}`,
-        `Từ cấm / nhạy cảm: ${forbiddenCount}`,
-        `Thiếu thông tin công ty: ${companyCount}`,
-        `Thiếu yêu cầu custom: ${dynamicCount}`,
-      ].join(" · ");
-
-  return {
-    ...data,
-    score,
-    grade,
-    score_reason: scoreReason,
-  };
-}
-
-// ===== ROUTE: CHECK TEXT =====
+// ===================================================================
+// 6. ROUTE: CHECK TEXT
+// ===================================================================
 app.post("/api/check", async (req, res) => {
   try {
-    const { text } = req.body || {};
+    const {
+      text,
+      platform = "facebook",
+      requirementsText = "",
+      selectedChecks = {},
+    } = req.body || {};
 
     if (!text || !text.trim()) {
       return res.status(400).json({ error: "Vui lòng gửi nội dung text." });
     }
 
+    // 1. Check rule cứng ở backend
+    const forbiddenWarnings = checkForbidden(text, platform);
+    const companyWarnings = checkCompanyInfo(text, selectedChecks);
+    const dynamicList = parseRequirementsText(requirementsText);
+    const dynamicWarnings = checkDynamicRequirements(text, dynamicList);
+
+    // 2. Gọi Gemini với output JSON
     const prompt = buildTextPrompt(text);
 
-    const result = await model.generateContent(prompt);
-    const raw = result.response.text().trim();
+    const result = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: { responseMimeType: "application/json" },
+    });
 
     let parsed;
     try {
-      parsed = extractJson(raw);
+      const raw = result.response.text();
+      parsed = JSON.parse(raw);
     } catch (e) {
       console.error("❌ Lỗi parse JSON (TEXT):", e.message);
-      console.error("RAW:", raw);
-      // fallback đơn giản
       parsed = {
         corrected_text: text,
         spelling_issues: [],
-        general_suggestions: ["Model không trả về JSON hợp lệ."],
+        general_suggestions: ["Model không trả về JSON hợp lệ (TEXT)."],
         hashtags: [],
         rewrite_text: text,
       };
     }
 
-    const normalized = normalizeResponse(parsed, text);
-    const scored = addScoreInfo(normalized, { isImage: false });
-    res.json(scored);
+    // 3. Gắn thêm các cảnh báo backend
+    parsed.forbidden_warnings = forbiddenWarnings;
+    parsed.company_warnings = companyWarnings;
+    parsed.dynamic_requirements = dynamicWarnings;
+
+    // 4. Tính điểm
+    const spellingCount = (parsed.spelling_issues || []).length;
+    const forbidCount = forbiddenWarnings.length;
+    const companyCount = companyWarnings.length;
+    const dynamicCount = dynamicWarnings.length;
+
+    const { score, grade, scoreReason } = computeScore({
+      spellingCount,
+      forbidCount,
+      companyCount,
+      dynamicCount,
+    });
+
+    parsed.score = score;
+    parsed.grade = grade;
+    parsed.score_reason = scoreReason;
+
+    const data = normalizeResponse(parsed, text);
+    res.json(data);
   } catch (err) {
     console.error("LỖI /api/check:", err);
     res.status(500).json({
@@ -321,16 +420,23 @@ app.post("/api/check", async (req, res) => {
   }
 });
 
-// ===== ROUTE: CHECK IMAGE =====
+// ===================================================================
+// 7. ROUTE: CHECK IMAGE
+// ===================================================================
 app.post("/api/check-image", async (req, res) => {
   try {
-    const { imageBase64 } = req.body || {};
+    const {
+      imageBase64,
+      platform = "facebook",
+      requirementsText = "",
+      selectedChecks = {},
+    } = req.body || {};
 
     if (!imageBase64) {
       return res.status(400).json({ error: "Thiếu imageBase64." });
     }
 
-    // tách header dataURL
+    // Tách header dataURL
     let mimeType = "image/png";
     let base64Data = imageBase64;
 
@@ -357,31 +463,58 @@ app.post("/api/check-image", async (req, res) => {
           ],
         },
       ],
+      generationConfig: { responseMimeType: "application/json" },
     });
-
-    const raw = result.response.text().trim();
 
     let parsed;
     try {
-      parsed = extractJson(raw);
+      const raw = result.response.text();
+      parsed = JSON.parse(raw);
     } catch (e) {
       console.error("❌ Lỗi parse JSON (IMAGE):", e.message);
-      console.error("RAW:", raw);
       parsed = {
+        plain_text: "",
         corrected_text: "",
         spelling_issues: [],
-        general_suggestions: [
-          "Model không trả về JSON hợp lệ cho hình ảnh.",
-        ],
+        general_suggestions: ["Model không trả về JSON hợp lệ cho hình ảnh."],
         design_feedback: [],
         hashtags: [],
         rewrite_text: "",
       };
     }
 
-    const normalized = normalizeResponse(parsed, "");
-    const scored = addScoreInfo(normalized, { isImage: true });
-    res.json(scored);
+    // Text nền để check rule backend (ưu tiên corrected_text)
+    const baseText =
+      parsed.corrected_text || parsed.plain_text || "";
+
+    const forbiddenWarnings = checkForbidden(baseText, platform);
+    const companyWarnings = checkCompanyInfo(baseText, selectedChecks);
+    const dynamicList = parseRequirementsText(requirementsText);
+    const dynamicWarnings = checkDynamicRequirements(baseText, dynamicList);
+
+    parsed.forbidden_warnings = forbiddenWarnings;
+    parsed.company_warnings = companyWarnings;
+    parsed.dynamic_requirements = dynamicWarnings;
+
+    // Tính điểm
+    const spellingCount = (parsed.spelling_issues || []).length;
+    const forbidCount = forbiddenWarnings.length;
+    const companyCount = companyWarnings.length;
+    const dynamicCount = dynamicWarnings.length;
+
+    const { score, grade, scoreReason } = computeScore({
+      spellingCount,
+      forbidCount,
+      companyCount,
+      dynamicCount,
+    });
+
+    parsed.score = score;
+    parsed.grade = grade;
+    parsed.score_reason = scoreReason;
+
+    const data = normalizeResponse(parsed, "");
+    res.json(data);
   } catch (err) {
     console.error("LỖI /api/check-image:", err);
     res.status(500).json({
@@ -391,12 +524,13 @@ app.post("/api/check-image", async (req, res) => {
   }
 });
 
-// ===== ROOT =====
+// ===================================================================
+// 8. ROOT & START SERVER
+// ===================================================================
 app.get("/", (req, res) => {
   res.send("AI Checker backend is running.");
 });
 
-// ===== START SERVER =====
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ AI Checker backend đang chạy tại port ${PORT}`);

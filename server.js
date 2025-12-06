@@ -26,7 +26,7 @@ app.use(express.json({ limit: "12mb" })); // để nhận base64 image
 function extractJson(text) {
   if (!text) throw new Error("Model không trả về nội dung.");
 
-  // Nếu Gemini bọc trong ```json ... ```
+  // Nếu Gemini bọc trong ```json ... ``` hoặc ``` ... ```
   const fence =
     text.match(/```json([\s\S]*?)```/i) ||
     text.match(/```([\s\S]*?)```/i);
@@ -35,7 +35,7 @@ function extractJson(text) {
   return JSON.parse(jsonStr);
 }
 
-// ===== HELPER: build prompt chung cho TEXT =====
+// ===== PROMPT TEXT =====
 function buildTextPrompt(text) {
   return `
 Bạn là trợ lý biên tập nội dung tiếng Việt cho một trung tâm dạy Cờ vua & Vẽ cho trẻ từ 3–15 tuổi.
@@ -68,16 +68,8 @@ NHIỆM VỤ:
    - Không thay đổi thông tin sự kiện / chương trình
    - Có thể dùng các icon bullet như đã nêu ở trên để bài viết sinh động hơn
    → ghi vào "rewrite_text".
-6. Tự chấm điểm theo tiêu chí:
-   - score: số từ 0–100
-   - grade:
-       + "A" nếu score >= 85
-       + "B" nếu 65 <= score < 85
-       + "C" nếu score < 65
-   - score_reason: 1–3 câu giải thích ngắn gọn về điểm mạnh / điểm yếu
-     (dựa trên chính tả, rõ ràng thông điệp, phù hợp phụ huynh & trẻ em).
 
-7. FOOTER THÔNG TIN TRUNG TÂM (CHỈ THÊM VÀO "rewrite_text"):
+6. FOOTER THÔNG TIN TRUNG TÂM (CHỈ THÊM VÀO "rewrite_text"):
    - Sau khi viết lại nội dung chính, nếu trong bài gốc hoặc bản viết lại KHÔNG chứa hotline
      "0845.700.135" hoặc "084 502 0038", hãy tự động THÊM MỘT trong hai footer chuẩn dưới đây
      vào cuối "rewrite_text", cách phần nội dung phía trên bằng một dòng trống.
@@ -120,10 +112,7 @@ CHỈ TRẢ VỀ DUY NHẤT MỘT ĐỐI TƯỢNG JSON VỚI CẤU TRÚC CHÍNH 
   "hashtags": [
     "#..."
   ],
-  "rewrite_text": "...",
-  "score": 0,
-  "grade": "C",
-  "score_reason": "..."
+  "rewrite_text": "..."
 }
 
 BÀI GỐC:
@@ -131,72 +120,112 @@ BÀI GỐC:
 `;
 }
 
-
-// ===== HELPER: build prompt cho IMAGE =====
+// ===== PROMPT IMAGE =====
 function buildImagePrompt() {
   return `
-Bạn là chuyên gia thiết kế và biên tập nội dung. Nhiệm vụ của bạn:
+Bạn là chuyên gia: 
+- Thiết kế đồ hoạ (poster/brochure/banner Facebook),
+- Biên tập nội dung tiếng Việt,
+- Kiểm duyệt hình ảnh truyền thông cho trung tâm dạy Cờ Vua & Vẽ cho trẻ em.
 
-🔥 QUAN TRỌNG:
-- Chỉ trả về JSON đúng cấu trúc. 
-- Tuyệt đối KHÔNG viết thêm lời dẫn, không giải thích vòng ngoài.
-
-===========================
-PHẦN 1 — OCR (plain_text)
-===========================
-• Đọc TẤT CẢ chữ trên poster (gồm chữ nhỏ, chữ mờ, chữ thiếu dấu).
-• Chép lại y chang (không sửa lỗi).
-• Nếu chữ bị thiếu dấu (“tuyen sinh”, “mam non”), vẫn giữ nguyên.
+ẢNH ĐÍNH KÈM: là poster quảng cáo.  
+Hãy phân tích thật chính xác TỪNG CHỮ trên ảnh và KHÔNG tự bịa nội dung.
 
 ===========================
-PHẦN 2 — XỬ LÝ NỘI DUNG
+PHẦN 1 — OCR: ĐỌC CHỮ TRÊN ẢNH (plain_text)
 ===========================
-Trên cơ sở đoạn plain_text:
+1. Đọc TẤT CẢ chữ xuất hiện trong poster (dù lớn hay nhỏ).
+2. Chép lại giống 100% như ảnh (không sửa lỗi ở bước này).
+3. Nếu chữ bị thiếu dấu tiếng Việt (ví dụ: "tuyen sinh"), vẫn ghi đúng những gì bạn đọc được.
 
-corrected_text:
-• Sửa lỗi chính tả, đặc biệt lỗi dấu tiếng Việt.
-• Chuẩn hóa cách viết hoa.
-
-spelling_issues:
-• Liệt kê từng lỗi chính tả, theo dạng:
-  { "original": "...", "correct": "...", "reason": "..." }
-
-general_suggestions: (tối đa 5)
-• Góp ý cách rõ thông điệp, giảm chữ thừa, CTA rõ hơn.
-
-hashtags:
-• Gợi ý 5–12 hashtag (không dấu).
-
-rewrite_text:
-• Viết lại nội dung trong ảnh theo phiên bản đăng Facebook.
+→ Trả về trong trường "plain_text".
 
 ===========================
-PHẦN 3 — GÓP Ý THIẾT KẾ (design_feedback)
+PHẦN 2 — XỬ LÝ NỘI DUNG (corrected_text)
 ===========================
-Tối đa 5 góp ý:
-• Bố cục (cân đối, khoảng cách, thứ tự nhìn).
-• Màu sắc (tương phản, độ sáng).
-• Font chữ (đồng nhất, dễ đọc).
-• Icon minh hoạ phù hợp.
-• Thay đổi để poster hấp dẫn hơn.
+Dựa trên nội dung đọc được, hãy:
+
+2.1. Sửa chính tả, đặc biệt chú ý:
+- Thiếu dấu tiếng Việt (mầm non, tuyển sinh…)
+- Viết hoa / viết thường sai chuẩn
+- Sai tên thương hiệu (Cờ Vua Sài Gòn / Sai Gon Art)
+- Lỗi tách từ / dính chữ
+- Số điện thoại sai định dạng hoặc thiếu số
+
+→ Trả nội dung sau khi sửa vào "corrected_text".
+
+2.2. Liệt kê các lỗi vào "spelling_issues":
+Mỗi lỗi có dạng:
+{ "original": "...", "correct": "...", "reason": "..." }
+
+2.3. "general_suggestions" (tối đa 5 gợi ý)
+Tập trung vào:
+- Làm rõ thông điệp chính
+- Định hướng CTA mạnh & rõ ràng cho phụ huynh
+- Giảm trùng lặp, rút gọn các câu dài
+- Tăng tính hấp dẫn với trẻ em
+
+2.4. "hashtags": gợi ý 5–12 hashtag không dấu, bắt đầu bằng #.
+
+2.5. "rewrite_text": nếu phù hợp, bạn có thể gợi ý một phiên bản nội dung text ngắn gọn, dễ đọc dùng cho caption đi kèm poster.
 
 ===========================
-🔥 CHỈ TRẢ VỀ JSON DƯỚI ĐÂY 🔥
+PHẦN 3 — NHẬN XÉT THIẾT KẾ (design_feedback)
+===========================
+Hãy đánh giá poster theo chuẩn chuyên gia thiết kế:
+
+— BỐ CỤC
+- Các khối nội dung có cân đối trái/phải/trên/dưới không?
+- Đường nhìn (visual flow) có logic không?
+- Tiêu đề có đủ nổi bật không?
+- Khoảng cách giữa các block có bị dính hay quá thưa không?
+- Cần gom nhóm / đổi trật tự phần nào để dễ đọc hơn?
+
+— MÀU SẮC
+- Độ tương phản chữ–nền có đủ để đọc dễ không?
+- Tông màu có hài hoà & phù hợp trẻ em không?
+- Có vùng nào quá sáng / tối / chói / nhiễu gây mỏi mắt không?
+- Gợi ý điều chỉnh màu sắc thực tế.
+
+— FONT & ĐỒ HỌA
+- Font chữ có đồng nhất không?
+- Có dùng quá nhiều hiệu ứng (shadow/outline/gradient) gây rối không?
+- Logo/hotline có đủ nổi bật nhưng không lấn át nội dung khác?
+- Icon minh hoạ có phù hợp đối tượng là phụ huynh + trẻ em không?
+
+— GỢI Ý NÂNG CẤP
+- Rút gọn câu dài, tăng khoảng trắng
+- Thêm icon phù hợp
+- Tăng nhấn mạnh CTA
+- Điều chỉnh bố cục theo nguyên tắc 1/3 hoặc visual hierarchy
+
+Tối đa 5 góp ý chất lượng → mảng "design_feedback".
+
+===========================
+CHỈ TRẢ VỀ DUY NHẤT ĐỐI TƯỢNG JSON:
 ===========================
 
 {
-  "plain_text": "",
-  "corrected_text": "",
-  "spelling_issues": [],
-  "general_suggestions": [],
-  "hashtags": [],
-  "rewrite_text": "",
-  "design_feedback": []
+  "plain_text": "...",
+  "corrected_text": "...",
+  "spelling_issues": [
+    { "original": "...", "correct": "...", "reason": "..." }
+  ],
+  "general_suggestions": [
+    "..."
+  ],
+  "hashtags": [
+    "#..."
+  ],
+  "rewrite_text": "...",
+  "design_feedback": [
+    "..."
+  ]
 }
 
+KHÔNG ghi thêm bất cứ câu nào ngoài JSON.
 `;
 }
-
 
 // ===== HELPER: chuẩn hoá dữ liệu trả về (đảm bảo luôn có đủ field) =====
 function normalizeResponse(obj, fallbackText = "") {
@@ -211,28 +240,55 @@ function normalizeResponse(obj, fallbackText = "") {
     design_feedback: data.design_feedback || [],
     hashtags: data.hashtags || [],
     rewrite_text: data.rewrite_text || fallbackText,
-    score: typeof data.score === "number" ? data.score : null,
-    grade: data.grade || null,
-    score_reason: data.score_reason || "",
+    plain_text: data.plain_text || "",
+  };
+}
+
+// ===== HELPER: chấm điểm A/B/C ở backend =====
+function addScoreInfo(data, { isImage = false } = {}) {
+  const spellingCount = (data.spelling_issues || []).length;
+  const forbiddenCount = (data.forbidden_warnings || []).length;
+  const companyCount = (data.company_warnings || []).length;
+  const dynamicCount = (data.dynamic_requirements || []).length;
+
+  let score = 100;
+  score -= Math.min(spellingCount * 5, 30);   // tối đa -30 điểm do lỗi chính tả
+  score -= Math.min(forbiddenCount * 15, 45); // từ cấm nặng hơn
+  score -= Math.min(companyCount * 8, 24);
+  score -= Math.min(dynamicCount * 5, 25);
+  if (score < 0) score = 0;
+
+  let grade = "A";
+  if (score < 65) grade = "C";
+  else if (score < 85) grade = "B";
+
+  const scoreReason = isImage
+    ? `Lỗi chính tả trên poster: ${spellingCount}`
+    : [
+        `Lỗi chính tả: ${spellingCount}`,
+        `Từ cấm / nhạy cảm: ${forbiddenCount}`,
+        `Thiếu thông tin công ty: ${companyCount}`,
+        `Thiếu yêu cầu custom: ${dynamicCount}`,
+      ].join(" · ");
+
+  return {
+    ...data,
+    score,
+    grade,
+    score_reason: scoreReason,
   };
 }
 
 // ===== ROUTE: CHECK TEXT =====
 app.post("/api/check", async (req, res) => {
   try {
-    const {
-      text,
-      platform = "facebook",
-      requirementsText = "",
-      selectedChecks = {},
-    } = req.body || {};
+    const { text } = req.body || {};
 
     if (!text || !text.trim()) {
       return res.status(400).json({ error: "Vui lòng gửi nội dung text." });
     }
 
-   const prompt = buildTextPrompt(text);
-
+    const prompt = buildTextPrompt(text);
 
     const result = await model.generateContent(prompt);
     const raw = result.response.text().trim();
@@ -247,20 +303,15 @@ app.post("/api/check", async (req, res) => {
       parsed = {
         corrected_text: text,
         spelling_issues: [],
-        forbidden_warnings: [],
-        company_warnings: [],
-        dynamic_requirements: [],
         general_suggestions: ["Model không trả về JSON hợp lệ."],
         hashtags: [],
         rewrite_text: text,
-        score: null,
-        grade: null,
-        score_reason: "",
       };
     }
 
-    const data = normalizeResponse(parsed, text);
-    res.json(data);
+    const normalized = normalizeResponse(parsed, text);
+    const scored = addScoreInfo(normalized, { isImage: false });
+    res.json(scored);
   } catch (err) {
     console.error("LỖI /api/check:", err);
     res.status(500).json({
@@ -273,12 +324,7 @@ app.post("/api/check", async (req, res) => {
 // ===== ROUTE: CHECK IMAGE =====
 app.post("/api/check-image", async (req, res) => {
   try {
-    const {
-      imageBase64,
-      platform = "facebook",
-      requirementsText = "",
-      selectedChecks = {},
-    } = req.body || {};
+    const { imageBase64 } = req.body || {};
 
     if (!imageBase64) {
       return res.status(400).json({ error: "Thiếu imageBase64." });
@@ -294,11 +340,7 @@ app.post("/api/check-image", async (req, res) => {
       base64Data = m[2];
     }
 
-    const prompt = buildImagePrompt({
-      platform,
-      requirementsText,
-      selectedChecks,
-    });
+    const prompt = buildImagePrompt();
 
     const result = await model.generateContent({
       contents: [
@@ -328,21 +370,18 @@ app.post("/api/check-image", async (req, res) => {
       parsed = {
         corrected_text: "",
         spelling_issues: [],
-        forbidden_warnings: [],
-        company_warnings: [],
-        dynamic_requirements: [],
-        general_suggestions: ["Model không trả về JSON hợp lệ cho hình ảnh."],
+        general_suggestions: [
+          "Model không trả về JSON hợp lệ cho hình ảnh.",
+        ],
         design_feedback: [],
         hashtags: [],
         rewrite_text: "",
-        score: null,
-        grade: null,
-        score_reason: "",
       };
     }
 
-    const data = normalizeResponse(parsed, "");
-    res.json(data);
+    const normalized = normalizeResponse(parsed, "");
+    const scored = addScoreInfo(normalized, { isImage: true });
+    res.json(scored);
   } catch (err) {
     console.error("LỖI /api/check-image:", err);
     res.status(500).json({

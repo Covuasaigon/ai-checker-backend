@@ -36,10 +36,7 @@ function extractJson(text) {
 }
 
 // ===== HELPER: build prompt chung cho TEXT =====
-function buildTextPrompt(payload) {
-  const text =
-    typeof payload === "string" ? payload : (payload && payload.text) || "";
-
+function buildTextPrompt(text) {
   return `
 Bạn là trợ lý biên tập nội dung tiếng Việt cho một trung tâm dạy Cờ vua & Vẽ cho trẻ từ 3–15 tuổi.
 Đối tượng chính là phụ huynh, giọng văn cần:
@@ -49,26 +46,41 @@ Bạn là trợ lý biên tập nội dung tiếng Việt cho một trung tâm d
 - Phù hợp cho môi trường giáo dục, an toàn cho trẻ em
 
 QUY ĐỊNH VỀ ĐỊNH DẠNG:
-- KHÔNG dùng markdown kiểu **đậm**, __, #, * hoặc các ký hiệu markdown tương tự.
+- KHÔNG dùng markdown kiểu **đậm**, __, #, * hoặc các ký hiệu markdown.
 - Nếu muốn làm nổi bật ý, hãy dùng icon/bullet phù hợp, ví dụ:
   "📌", "✨", "🎨", "🧠", "♟️", "👉", "•"...
 - Mỗi ý chính nên nằm trên một dòng riêng, có thể bắt đầu bằng icon đó.
 - Không tự ý chèn code, JSON hoặc chú thích kỹ thuật vào nội dung bài viết.
 
 NHIỆM VỤ:
-1. Sửa chính tả, dấu câu, ngữ pháp cho bài viết, giữ nguyên ý chính.
-2. Liệt kê các lỗi chính tả đã sửa (mỗi lỗi gồm: original, correct, reason ngắn gọn).
-3. Đưa ra gợi ý tối ưu nội dung (tối đa 5 gợi ý, dạng câu ngắn dễ hiểu).
-4. Gợi ý từ 5–12 hashtag phù hợp cho bài viết về Cờ vua / Vẽ / giáo dục trẻ em (không có dấu, bắt đầu bằng #).
+1. Sửa chính tả, dấu câu, ngữ pháp cho bài viết, giữ nguyên ý chính
+   → ghi vào "corrected_text".
+2. Liệt kê các lỗi chính tả đã sửa (mỗi lỗi gồm: original, correct, reason ngắn gọn)
+   → mảng "spelling_issues".
+3. Đưa ra gợi ý tối ưu nội dung (tối đa 5 gợi ý, dạng câu ngắn dễ hiểu)
+   → mảng "general_suggestions".
+4. Gợi ý 5–12 hashtag phù hợp cho bài viết về Cờ vua / Vẽ / giáo dục trẻ em
+   (không dấu, bắt đầu bằng #, ví dụ: #covuasaigon, #lopcovua, #treem)
+   → mảng "hashtags".
 5. Viết lại toàn bộ bài theo phong cách:
    - Vui tươi, ấm áp, khích lệ các bé
    - Lịch sự, dễ hiểu cho phụ huynh
    - Không thay đổi thông tin sự kiện / chương trình
-   - Có thể dùng các icon bullet như đã nêu ở trên để bài viết sinh động hơn.
-6. FOOTER THÔNG TIN TRUNG TÂM (CHỈ THÊM VÀO "rewrite_text"):
+   - Có thể dùng các icon bullet như đã nêu ở trên để bài viết sinh động hơn
+   → ghi vào "rewrite_text".
+6. Tự chấm điểm theo tiêu chí:
+   - score: số từ 0–100
+   - grade:
+       + "A" nếu score >= 85
+       + "B" nếu 65 <= score < 85
+       + "C" nếu score < 65
+   - score_reason: 1–3 câu giải thích ngắn gọn về điểm mạnh / điểm yếu
+     (dựa trên chính tả, rõ ràng thông điệp, phù hợp phụ huynh & trẻ em).
+
+7. FOOTER THÔNG TIN TRUNG TÂM (CHỈ THÊM VÀO "rewrite_text"):
    - Sau khi viết lại nội dung chính, nếu trong bài gốc hoặc bản viết lại KHÔNG chứa hotline
      "0845.700.135" hoặc "084 502 0038", hãy tự động THÊM MỘT trong hai footer chuẩn dưới đây
-     vào cuối đoạn "rewrite_text", cách phần nội dung phía trên bằng một dòng trống.
+     vào cuối "rewrite_text", cách phần nội dung phía trên bằng một dòng trống.
 
    [FOOTER_COVUA]
    📍 HỆ THỐNG TRUNG TÂM CỜ VUA SÀI GÒN (SGC)
@@ -89,14 +101,13 @@ NHIỆM VỤ:
    🏙️ Tân Bình • Tân Phú • Bình Tân • Quận 10
 
    QUY TẮC CHỌN FOOTER:
-   - Nếu nội dung chủ yếu nói về "cờ vua, chess, kỳ thủ, quân cờ, ván cờ" => dùng [FOOTER_COVUA].
-   - Nếu nội dung chủ yếu nói về "vẽ, hội hoạ, mỹ thuật, art, tranh" => dùng [FOOTER_VE].
-   - Nếu bài nói về CẢ HAI (vừa cờ vua vừa vẽ) => dùng CẢ HAI footer, trong đó [FOOTER_COVUA] viết trước.
-   - Nếu nội dung không rõ ràng, mặc định dùng [FOOTER_COVUA].
-   - Nếu trong bài gốc đã có đủ các thông tin trong footer (hotline, website, địa chỉ),
-     thì KHÔNG thêm footer trùng lặp nữa, nhưng có thể chỉnh lại cho đồng bộ format như trên.
+   - Nếu nội dung chủ yếu nói về cờ vua → dùng [FOOTER_COVUA].
+   - Nếu nội dung chủ yếu nói về vẽ / mỹ thuật → dùng [FOOTER_VE].
+   - Nếu nói về cả cờ vua lẫn vẽ → dùng CẢ HAI footer (Cờ vua trước, Vẽ sau).
+   - Nếu không rõ ràng, mặc định dùng [FOOTER_COVUA].
+   - Nếu bài gốc đã có đủ thông tin tương đương, có thể chuẩn hóa lại cho đẹp hơn.
 
-CHỈ TRẢ VỀ DUY NHẤT MỘT ĐỐI TƯỢNG JSON VỚI CẤU TRÚC:
+CHỈ TRẢ VỀ DUY NHẤT MỘT ĐỐI TƯỢNG JSON VỚI CẤU TRÚC CHÍNH XÁC:
 
 {
   "corrected_text": "...",
@@ -111,18 +122,15 @@ CHỈ TRẢ VỀ DUY NHẤT MỘT ĐỐI TƯỢNG JSON VỚI CẤU TRÚC:
   ],
   "rewrite_text": "...",
   "score": 0,
-  "grade": "A",
+  "grade": "C",
   "score_reason": "..."
 }
-
-Nếu không có lỗi chính tả, trả về "spelling_issues": [].
-Nếu không có gợi ý, trả về "general_suggestions": [].
-Nếu không cần hashtag, vẫn trả về "hashtags": [].
 
 BÀI GỐC:
 """${text}"""
 `;
 }
+
 
 // ===== HELPER: build prompt cho IMAGE =====
 function buildImagePrompt() {
@@ -223,12 +231,8 @@ app.post("/api/check", async (req, res) => {
       return res.status(400).json({ error: "Vui lòng gửi nội dung text." });
     }
 
-    const prompt = buildTextPrompt({
-      text,
-      platform,
-      requirementsText,
-      selectedChecks,
-    });
+   const prompt = buildTextPrompt(text);
+
 
     const result = await model.generateContent(prompt);
     const raw = result.response.text().trim();
